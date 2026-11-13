@@ -1,10 +1,10 @@
-name: Build final IPA
+name: Build unsigned IPA
 
 on:
   workflow_dispatch:
     inputs:
       confirm_final_build:
-        description: "Type BUILD once the destination repository and signing settings are confirmed"
+        description: "Type BUILD to build and package one unsigned iOS device IPA; no signing credentials are used"
         required: true
         type: string
 
@@ -12,46 +12,23 @@ permissions:
   contents: read
 
 jobs:
-  archive:
-    if: ${{ github.event.inputs.confirm_final_build == 'BUILD' }}
+  build-unsigned:
+    if: ${{ github.ref == 'refs/heads/main' && github.event.inputs.confirm_final_build == 'BUILD' }}
     runs-on: macos-15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Install XcodeGen
         run: brew install xcodegen
-      - name: Install development signing assets
-        env:
-          P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
-          P12_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
-          PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
-        run: |
-          set -euo pipefail
-          KEYCHAIN_PATH="$RUNNER_TEMP/build-signing.keychain-db"
-          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
-          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
-          echo "$KEYCHAIN_PASSWORD" | security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security list-keychains -d user -s "$KEYCHAIN_PATH"
-          security default-keychain -d user -s "$KEYCHAIN_PATH"
-          CERT_PATH="$RUNNER_TEMP/development.p12"
-          PROFILE_PATH="$RUNNER_TEMP/development.mobileprovision"
-          echo "$P12_BASE64" | base64 --decode > "$CERT_PATH"
-          echo "$PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
-          security import "$CERT_PATH" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
-          security cms -D -i "$PROFILE_PATH" > "$RUNNER_TEMP/profile.plist"
-          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' "$RUNNER_TEMP/profile.plist")
-          PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print Name' "$RUNNER_TEMP/profile.plist")
-          cp "$PROFILE_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
-          echo "PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
       - name: Generate Xcode project
         run: xcodegen generate
-      - name: Archive app
+      - name: Build and package unsigned arm64 IPA
         env:
-          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           BUNDLE_ID: com.cn00k.stockmonitorv6
+          APP_GROUP_ID: group.com.cn00k.stockmonitorv6
+          DERIVED_DATA: ${{ runner.temp }}/StockMonitorV6-DerivedData
+          STAGING_DIR: ${{ runner.temp }}/StockMonitorV6-unsigned-staging
+          ARTIFACT_DIR: ${{ runner.temp }}/StockMonitorV6-unsigned-artifacts
         run: |
           set -euo pipefail
           xcodebuild \
@@ -59,39 +36,69 @@ jobs:
             -scheme MonitorApp \
             -configuration Release \
             -sdk iphoneos \
-            -archivePath "$RUNNER_TEMP/StockMonitorV6.xcarchive" \
-            DEVELOPMENT_TEAM="$TEAM_ID" \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$DERIVED_DATA" \
+            -arch arm64 \
             STOCKMONITOR_APP_BUNDLE_ID="$BUNDLE_ID" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="Apple Development" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
-            archive
-      - name: Export IPA
-        env:
-          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          BUNDLE_ID: com.cn00k.stockmonitorv6
-          PROFILE_NAME: ${{ env.PROFILE_NAME }}
-        run: |
-          set -euo pipefail
-          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0"><dict>
-            <key>method</key><string>development</string>
-            <key>signingStyle</key><string>manual</string>
-            <key>teamID</key><string>${TEAM_ID}</string>
-            <key>provisioningProfiles</key><dict>
-              <key>${BUNDLE_ID}</key><string>${PROFILE_NAME}</string>
-            </dict>
-          </dict></plist>
-          PLIST
-          xcodebuild -exportArchive \
-            -archivePath "$RUNNER_TEMP/StockMonitorV6.xcarchive" \
-            -exportPath "$RUNNER_TEMP/export" \
-            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
-      - uses: actions/upload-artifact@v4
+            CODE_SIGN_IDENTITY= \
+            DEVELOPMENT_TEAM= \
+            PROVISIONING_PROFILE_SPECIFIER= \
+            build
+
+          PRODUCTS_DIR="$DERIVED_DATA/Build/Products/Release-iphoneos"
+          APP_PATH="$(find "$PRODUCTS_DIR" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$APP_PATH" && test -d "$APP_PATH"
+          APP_INFO="$APP_PATH/Info.plist"
+          test -f "$APP_INFO"
+          ACTUAL_BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_INFO")
+          test "$ACTUAL_BUNDLE_ID" = "$BUNDLE_ID"
+          APP_GROUP_FROM_ENTITLEMENTS=$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups:0' App/StockMonitor.entitlements)
+          test "$APP_GROUP_FROM_ENTITLEMENTS" = "$APP_GROUP_ID"
+          APP_EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_INFO")
+          APP_ARCHS="$(xcrun lipo -archs "$APP_PATH/$APP_EXECUTABLE" | xargs)"
+          test "$APP_ARCHS" = arm64
+
+          SIGNING_MARKER="$(find "$APP_PATH" \( -type d -name _CodeSignature -o -type f -name embedded.mobileprovision \) -print -quit)"
+          if [ -n "$SIGNING_MARKER" ] || codesign --verify "$APP_PATH" >/dev/null 2>&1; then
+            echo "::error::Unexpected code signature or provisioning profile in unsigned app"
+            exit 1
+          fi
+
+          mkdir -p "$STAGING_DIR/Payload" "$ARTIFACT_DIR"
+          ditto "$APP_PATH" "$STAGING_DIR/Payload/$(basename "$APP_PATH")"
+          IPA_PATH="$ARTIFACT_DIR/StockMonitorV6-unsigned.ipa"
+          (cd "$STAGING_DIR" && zip -qry "$IPA_PATH" Payload)
+          unzip -tq "$IPA_PATH"
+          ZIP_LIST="$ARTIFACT_DIR/StockMonitorV6-ipa-files.txt"
+          unzip -Z1 "$IPA_PATH" > "$ZIP_LIST"
+          grep -Fqx "Payload/$(basename "$APP_PATH")/Info.plist" "$ZIP_LIST"
+          if grep -E '(^|/)_CodeSignature/|(^|/)embedded\.mobileprovision$' "$ZIP_LIST"; then
+            echo "::error::Unsigned IPA unexpectedly contains signing assets"
+            exit 1
+          fi
+
+          cp App/StockMonitor.entitlements "$ARTIFACT_DIR/StockMonitorV6-signing.entitlements"
+          IPA_SHA256="$(shasum -a 256 "$IPA_PATH" | awk '{print $1}')"
+          IPA_SIZE_BYTES="$(stat -f%z "$IPA_PATH")"
+          IPA_FILE_COUNT="$(wc -l < "$ZIP_LIST" | tr -d ' ')"
+          cat > "$ARTIFACT_DIR/StockMonitorV6-build-manifest.txt" <<EOF
+          bundle_id=$ACTUAL_BUNDLE_ID
+          app_group_from_entitlements=$APP_GROUP_FROM_ENTITLEMENTS
+          architecture=$APP_ARCHS
+          code_signing=disabled
+          embedded_provisioning_profile=no
+          signed_entitlements_embedded=no; use the included .entitlements file when signing
+          ipa_sha256=$IPA_SHA256
+          ipa_size_bytes=$IPA_SIZE_BYTES
+          ipa_file_count=$IPA_FILE_COUNT
+          EOF
+      - name: Upload unsigned IPA and signing metadata
+        uses: actions/upload-artifact@v4
         with:
-          name: StockMonitorV6-IPA
-          path: ${{ runner.temp }}/export/*.ipa
+          name: StockMonitorV6-unsigned-IPA
+          path: ${{ runner.temp }}/StockMonitorV6-unsigned-artifacts/*
           if-no-files-found: error
           retention-days: 14

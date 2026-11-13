@@ -43,14 +43,14 @@ CLS 依赖可在本机计算的签名参数，站点改版可能使适配器失�
 
 `UserDefaults.standard` 仅保存 App 自身的 Analyst endpoint/model 偏好；`Resources/PrivacyInfo.xcprivacy` 已声明 Apple required-reason API `NSPrivacyAccessedAPICategoryUserDefaults` / `CA92.1`。当前代码未发现相机、麦克风、位置、照片库或通知权限 API，因此没有相应的 usage-description 字符串需求。API key 仍由 iOS Keychain 管理，不包含在源码或 workflow 中。
 
-`.github/workflows/build-ipa.yml` 只有 `workflow_dispatch` 手动触发，且需要输入 `BUILD` 才会执行归档；目前配置为 Apple Development 签名并导出 `development` IPA。此次本地审计未触发 Actions、XcodeGen、xcodebuild、IPA 构建或 push，也未读取或设置任何 signing secret。当前工作区对应私有仓库 [CN00K/StockMonitorV6](https://github.com/CN00K/StockMonitorV6)，初始 `main` 提交为 `aceb771ace6c2023181f74a3c5e58f37418ee76f`；本次编辑尚未推送。未运行 XcodeGen 或 Apple SDK，因此仍需在 macOS/Xcode 上检查实际工程生成、签名和设备运行。
+`.github/workflows/build-ipa.yml` 只有 `main` 分支 `workflow_dispatch` 手动触发，且必须输入 `BUILD`；push 不会启动构建。工作流用 `CODE_SIGNING_ALLOWED=NO`、`CODE_SIGNING_REQUIRED=NO`、手动签名模式及空的签名身份/team/profile 设置构建 arm64 iOS 设备版，再把 `.app` 打包成 unsigned IPA；不读取 Apple signing secrets，不创建密钥串、不导入证书，也不嵌入 provisioning profile。Artifact `StockMonitorV6-unsigned-IPA` 保留 14 天，包含 IPA、`StockMonitorV6-signing.entitlements` sidecar、构建 manifest 和 IPA 文件清单。unsigned IPA 没有签名，也没有签名后生效的 entitlements；App Group 仅在 sidecar/源码 entitlement 中声明，必须由用户签名时通过匹配的 provisioning profile 授权。工作流修改需在私有仓库 [CN00K/StockMonitorV6](https://github.com/CN00K/StockMonitorV6) 的 `main` 上提交；XcodeGen 生成及 Apple SDK 设备构建由该手动工作流执行。
 
 ## 已选标识、仓库与 Apple 环境验收
 
-- **仓库：** 项目位于私有 [CN00K/StockMonitorV6](https://github.com/CN00K/StockMonitorV6)，初始 `main` 提交为 `aceb771ace6c2023181f74a3c5e58f37418ee76f`；本次本地编辑尚未推送。
+- **仓库：** 项目位于私有 [CN00K/StockMonitorV6](https://github.com/CN00K/StockMonitorV6)，初始 `main` 提交为 `aceb771ace6c2023181f74a3c5e58f37418ee76f`。
 - **App 标识：** App Bundle ID 为 `com.cn00k.stockmonitorv6`，核心 framework 标识为 `com.cn00k.stockmonitorv6.core`，App Group 为 `group.com.cn00k.stockmonitorv6`。三处工程配置、entitlements 和 SQLite fallback 必须保持一致，并在 Apple Developer 中核对对应 App ID 与 App Group 能力。
-- **签名与分发：** 目标为面向已注册设备的 Apple Development 签名 IPA，不是 unsigned、Ad Hoc 或 App Store/TestFlight 分发。手动运行 workflow 前，仓库 Actions secrets 必须提供 `APPLE_TEAM_ID`、`IOS_CERTIFICATE_P12_BASE64`、`IOS_CERTIFICATE_PASSWORD` 与 `IOS_PROVISIONING_PROFILE_BASE64`；当前仓库设置中这四项均尚未配置。不要添加或依赖其他 Bundle ID secret。证书应为 Apple Development，provisioning profile 应匹配 `com.cn00k.stockmonitorv6`、启用 `group.com.cn00k.stockmonitorv6`，并包含要安装 IPA 的已注册设备 UDID。profile 名称由 workflow 从 profile 本体读取，导出方式为 `development`。
-- **Apple 验收：** 在选定 macOS/Xcode 与标识后，运行 XcodeGen 和 iOS build，验证 Keychain、App Group、资源加载、前后台暂停/恢复、网络与分享，并在目标 iOS 设备上确认。只有签名资产、App Group 能力和设备注册均核对无误后，再进行唯一一次最终 IPA 构建。
+- **签名与分发：** 当前目标为 unsigned iOS 设备 IPA，由用户用自己的证书签名。workflow 不需要 Apple Team ID、P12、P12 密码或 provisioning profile，仓库不需要为该 workflow 配置这些签名 secrets。unsigned IPA 在签名之前不能安装；签名时，用户自己的 Apple Developer team 必须能注册 `com.cn00k.stockmonitorv6` 与 `group.com.cn00k.stockmonitorv6`，并提供匹配 Bundle ID、授权该 App Group 且包含目标设备 UDID 的 provisioning profile。artifact 同时给出 entitlement sidecar 供签名时使用。
+- **Apple 验收：** workflow 只生成未签名 arm64 IPA；它不执行签名或设备安装。用户签名后仍需在目标 iOS 设备验证 Keychain、App Group、资源加载、前后台暂停/恢复、网络和分享。App Group 在未签名 IPA 中不会作为有效签名 entitlement 生效。
 - **LLM Provider：** App 内尚未配置兼容 Structured Outputs 的 HTTPS `/chat/completions` endpoint、model ID 和 API key。用户需在设备上自行设置并核对 Provider 的价格、限额与兼容性；分析只在用户明确触发并确认后发送。
 - **App Store 隐私披露：** 若选择 App Store/TestFlight，需另行核实对用户选择发送给其 LLM Provider 的本地材料应如何填写 App Privacy 披露；`PrivacyInfo.xcprivacy` 中的 `CA92.1` 仅声明 required-reason API，不等于完整隐私标签。
 - 市场数据/资讯覆盖仍受公开非正式接口限制；未核实的日历年份保持 unknown，未添加猜测型每日涨跌停价。雪球、MIIT、CNINFO 上交所代码映射和龙虎榜席位明细仍不完整。
