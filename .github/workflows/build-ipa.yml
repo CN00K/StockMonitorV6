@@ -28,7 +28,7 @@ jobs:
           set -euo pipefail
           KEYCHAIN_PATH="$RUNNER_TEMP/build-signing.keychain-db"
           KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
-          echo "$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
           echo "$KEYCHAIN_PASSWORD" | security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
@@ -51,7 +51,7 @@ jobs:
       - name: Archive app
         env:
           TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          BUNDLE_ID: ${{ secrets.APPLE_BUNDLE_ID }}
+          BUNDLE_ID: com.cn00k.stockmonitorv6
         run: |
           set -euo pipefail
           xcodebuild \
@@ -69,7 +69,7 @@ jobs:
       - name: Export IPA
         env:
           TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          BUNDLE_ID: ${{ secrets.APPLE_BUNDLE_ID }}
+          BUNDLE_ID: com.cn00k.stockmonitorv6
           PROFILE_NAME: ${{ env.PROFILE_NAME }}
         run: |
           set -euo pipefail

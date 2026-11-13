@@ -135,7 +135,7 @@ public actor SQLiteMonitorStore: MonitorStore {
     private let decoder = JSONDecoder()
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-    public init(databaseURL: URL? = nil, appGroupIdentifier: String? = "group.com.example.stockmonitor",
+    public init(databaseURL: URL? = nil, appGroupIdentifier: String? = "group.com.cn00k.stockmonitorv6",
                 maximumQuoteRows: Int = 250_000) {
         self.maximumQuoteRows = max(1, maximumQuoteRows)
         if let databaseURL {

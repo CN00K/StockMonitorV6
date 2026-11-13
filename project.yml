@@ -1,6 +1,6 @@
 name: StockMonitorV6
 options:
-  bundleIdPrefix: com.example.stockmonitor
+  bundleIdPrefix: com.cn00k
   deploymentTarget:
     iOS: "17.0"
 settings:
@@ -16,7 +16,7 @@ targets:
       - Sources/StockMonitorCore
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.stockmonitor.core
+        PRODUCT_BUNDLE_IDENTIFIER: com.cn00k.stockmonitorv6.core
         DEFINES_MODULE: YES
         SKIP_INSTALL: YES
         OTHER_LDFLAGS: "$(inherited) -lsqlite3"
@@ -34,7 +34,7 @@ targets:
       - target: StockMonitorCore
     settings:
       base:
-        STOCKMONITOR_APP_BUNDLE_ID: com.example.stockmonitor.app
+        STOCKMONITOR_APP_BUNDLE_ID: com.cn00k.stockmonitorv6
         PRODUCT_BUNDLE_IDENTIFIER: "$(STOCKMONITOR_APP_BUNDLE_ID)"
         PRODUCT_NAME: Stock Monitor
         GENERATE_INFOPLIST_FILE: YES
