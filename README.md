@@ -45,6 +45,10 @@ CLS 依赖可在本机计算的签名参数，站点改版可能使适配器失�
 
 `.github/workflows/build-ipa.yml` 只有 `main` 分支 `workflow_dispatch` 手动触发，且必须输入 `BUILD`；push 不会启动构建。工作流用 `CODE_SIGNING_ALLOWED=NO`、`CODE_SIGNING_REQUIRED=NO`、手动签名模式及空的签名身份/team/profile 设置构建 arm64 iOS 设备版，再把 `.app` 打包成 unsigned IPA；不读取 Apple signing secrets，不创建密钥串、不导入证书，也不嵌入 provisioning profile。Artifact `StockMonitorV6-unsigned-IPA` 保留 14 天，包含 IPA、`StockMonitorV6-signing.entitlements` sidecar、构建 manifest 和 IPA 文件清单。unsigned IPA 没有签名，也没有签名后生效的 entitlements；App Group 仅在 sidecar/源码 entitlement 中声明，必须由用户签名时通过匹配的 provisioning profile 授权。工作流修改需在私有仓库 [CN00K/StockMonitorV6](https://github.com/CN00K/StockMonitorV6) 的 `main` 上提交；XcodeGen 生成及 Apple SDK 设备构建由该手动工作流执行。
 
+`Resources/Assets.xcassets/AppIcon.appiconset` 已包含 1024×1024、不透明 RGB PNG 图标：深蓝背景、青绿色雷达与市场走势，无文字。XcodeGen 将该 catalog 作为 App resource，并通过 `ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon` 指定它；iOS 自行应用圆角遮罩。
+
+`codemagic.yaml` 另提供 `unsigned-ios` 手动工作流，只使用 `mac_mini_m2`，总超时 30 分钟；没有 `triggering` 事件、环境变量组、Apple 集成、证书导入或 publishing。push、PR、tag 不会自动启动此 YAML 工作流。其无签名开关与 Bundle ID/App Group/arm64 校验和 GitHub 工作流一致，并校验编译产物的 AppIcon 名称。连接或手动启动前，必须在 Codemagic 确认使用个人账户、可用免费 M2 分钟足以覆盖这 30 分钟上限且没有其他构建消耗该额度，不启用 billing、不接受任何收费。配置选择 M2 本身不代表账户额度已通过核验；无法确认免费时不得启动。官方说明见 [手动触发规则](https://docs.codemagic.io/yaml-running-builds/starting-builds-automatically/) 和 [免费分钟适用范围](https://docs.codemagic.io/billing/pricing/)。API token 仅用于外部管理请求头，不进入仓库、YAML 或 IPA。
+
 ## 已选标识、仓库与 Apple 环境验收
 
 - **仓库：** 项目位于私有 [CN00K/StockMonitorV6](https://github.com/CN00K/StockMonitorV6)，初始 `main` 提交为 `aceb771ace6c2023181f74a3c5e58f37418ee76f`。

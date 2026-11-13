@@ -30,6 +30,7 @@ targets:
       - Resources/collector.yaml
       - Resources/sector_map.json
       - Resources/PrivacyInfo.xcprivacy
+      - Resources/Assets.xcassets
     dependencies:
       - target: StockMonitorCore
     settings:
@@ -38,6 +39,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: "$(STOCKMONITOR_APP_BUNDLE_ID)"
         PRODUCT_NAME: Stock Monitor
         GENERATE_INFOPLIST_FILE: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_ENTITLEMENTS: App/StockMonitor.entitlements
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIUserInterfaceStyle: Automatic
