@@ -1,0 +1,51 @@
+# Client-side defaults adapted from the StockAgent collector configuration.
+# Server schedules, Redis TTL and lifecycle jobs are intentionally excluded.
+title_similarity_threshold: 0.85
+
+event_filter:
+  enabled: true
+  rules:
+    low_priority_no_sector:
+      enabled: true
+      max_priority: 2
+      require_sectors: true
+    low_value_individual:
+      enabled: true
+      max_priority: 2
+      impact_scope: stock
+      min_news_count: 2
+    always_keep:
+      min_priority: 3
+      or_has_sectors: true
+      or_news_count: 3
+
+# P1=official, P2=regulator, P3=professional finance, P4=general media,
+# P5=community. The six requested client parsers are assigned accordingly.
+source_priority:
+  P1: [gov, cninfo]
+  P2: [miit]
+  P3: [cls, eastmoney_lhb]
+  P4: [eastmoney, eastmoney_news, thepaper]
+  P5: [xueqiu]
+
+llm_enrichment:
+  enabled: true
+  tiered_strategy:
+    P1: full
+    P2: full
+    P3: conditional
+    P4: rules_only
+    P5: rules_only
+
+health_thresholds:
+  p1_success_rate: 0.99
+  event_valid_rate: 0.80
+  llm_call_ratio: 0.50
+
+runtime:
+  quotes_batch_size: 50
+  default_poll_seconds: 5
+  maximum_watch_count_before_slow_poll: 120
+  request_budget:
+    hq.sinajs.cn: 2
+    push2.eastmoney.com: 4
