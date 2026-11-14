@@ -38,6 +38,7 @@ targets:
     dependencies:
       - target: StockMonitorCore
     info:
+      path: App/Info.plist
       properties:
         CFBundleURLTypes:
           - CFBundleURLName: com.cn00k.stockmonitorv6
