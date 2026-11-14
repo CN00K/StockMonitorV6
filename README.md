@@ -43,11 +43,11 @@ CLS 依赖可在本机计算的签名参数，站点改版可能使适配器失�
 
 `swift test` 是测试命令。当前 XCTest 覆盖上述功能，并包含分钟指标/VWAP、扫描样本统计、Pearson 与因子相关矩阵、确定性 bootstrap、回测超额收益序列、Sankey/ForceGraph 布局，以及真实 D-6 响应 fixture 的字段/解析契约测试。
 
-本次 UI v2 增加 News 本地日报 PDF 生成/分享与近 7 天 Feed 的类型、P1–P3 和自选标签筛选、Settings 的显式 F10 刷新/通知授权与投递/白名单诊断 JSON 分享、市场页 Workbench 看板/列表与本机来源/会话健康面板，以及 watchlist-aware 股票路由。健康面板仅读 SQLite 和最近实际观察到的来源状态，区分无样本、部分返回、来源时间未知、过期及失败；不会新增网络请求或补造指标。Feed 筛选仅作用于已加载的最多 100 条本地事件，不推断缺失关联、不新增网络请求。Monitor 未读信号区新增四档本机级别筛选（全部/紧急/警告/提示），仅筛选当前已加载的未读信号；`AlertSignal` 直接提供 `code`、`level`、`createdAt`，而规则族仅能从部分 `ruleID` 间接识别，旧/自定义规则 ID 不保证可映射。状态只含未读信号，无法据此断言规则从未触发，因此不显示猜测的空闲规则状态。使用 Linux Swift 6.4.2（`$HOME/.local/opt/swift-6.4.2/usr/bin`）验证：**258 项 XCTest 全部通过**；21 个 App Swift 文件通过 `swiftc -frontend -parse`；6 项 Python 检查通过，`git diff --check` 通过。当前无 Apple SDK，未做 iOS typecheck、Xcode Preview 或设备视觉验收；没有真实 LLM 调用、外部数据刷新、workflow、push 或 IPA build。
+本次 UI v2 增加 News 本地日报 PDF 生成/分享与近 7 天 Feed 的类型、P1–P3 和自选标签筛选、Settings 的显式 F10 刷新/通知授权与投递/白名单诊断 JSON 分享、市场页 Workbench 看板/列表与本机来源/会话健康面板，以及 watchlist-aware 股票路由。健康面板仅读 SQLite 和最近实际观察到的来源状态，区分无样本、部分返回、来源时间未知、过期及失败；不会新增网络请求或补造指标。Feed 筛选仅作用于已加载的最多 100 条本地事件，不推断缺失关联、不新增网络请求。Monitor 未读信号区新增四档本机级别筛选（全部/紧急/警告/提示），仅筛选当前已加载的未读信号；`AlertSignal` 直接提供 `code`、`level`、`createdAt`，而规则族仅能从部分 `ruleID` 间接识别，旧/自定义规则 ID 不保证可映射。状态只含未读信号，无法据此断言规则从未触发，因此不显示猜测的空闲规则状态。使用 Linux Swift 6.4.2（`$HOME/.local/opt/swift-6.4.2/usr/bin`）验证：**259 项 XCTest 全部通过**；21 个 App Swift 文件通过 `swiftc -frontend -parse`；`git diff --check` 通过。当前无 Apple SDK，未做 iOS typecheck、Xcode Preview 或设备视觉验收；本轮没有真实 LLM 调用或外部数据刷新。Codemagic `unsigned-ios` 已从 `main` 提交 `80e72a71055c37b54f0a69f612226e720ffa9ec4` 成功生成未签名 arm64 IPA（build ID `6af823b890e83b09c4fa1ff9`）。
 
 `UserDefaults.standard` 保存 Analyst endpoint/model 偏好与用户手动导入的交易日历 payload（不含行情、持仓或 Provider 密钥）；`Resources/PrivacyInfo.xcprivacy` 已声明 Apple required-reason API `NSPrivacyAccessedAPICategoryUserDefaults` / `CA92.1`。App 启动不请求通知权限；只有用户在 Settings 显式点按授权按钮才会调用系统提示，获准后仍需另行点按通知投递。当前没有相机、麦克风、位置或照片库权限调用。API key 仍由 iOS Keychain 管理，不包含在源码或 workflow 中。
 
-`.github/workflows/build-ipa.yml` 只有 `main` 分支 `workflow_dispatch` 手动触发，且必须输入 `BUILD`；push 不会启动构建。工作流用 `CODE_SIGNING_ALLOWED=NO`、`CODE_SIGNING_REQUIRED=NO`、手动签名模式及空的签名身份/team/profile 设置构建 arm64 iOS 设备版，再把 `.app` 打包成 unsigned IPA；不读取 Apple signing secrets，不创建密钥串、不导入证书，也不嵌入 provisioning profile。Artifact `StockMonitorV6-unsigned-IPA` 保留 14 天，包含 IPA、`StockMonitorV6-signing.entitlements` sidecar、构建 manifest 和 IPA 文件清单。unsigned IPA 没有签名，也没有签名后生效的 entitlements；App Group 仅在 sidecar/源码 entitlement 中声明，必须由用户签名时通过匹配的 provisioning profile 授权。工作流修改需在私有仓库 [CN00K/StockMonitorV6](https://github.com/CN00K/StockMonitorV6) 的 `main` 上提交；XcodeGen 生成及 Apple SDK 设备构建由该手动工作流执行。
+`.github/workflows/build-ipa.yml` 只有 `main` 分支 `workflow_dispatch` 手动触发，且必须输入 `BUILD`；push 不会启动构建。工作流用 `CODE_SIGNING_ALLOWED=NO`、`CODE_SIGNING_REQUIRED=NO`、手动签名模式及空的签名身份/team/profile 设置构建 arm64 iOS 设备版，再把 `.app` 打包成 unsigned IPA；不读取 Apple signing secrets，不创建密钥串、不导入证书，也不嵌入 provisioning profile。Artifact `StockMonitorV6-unsigned-IPA` 保留 14 天，包含 IPA、`StockMonitorV6-signing.entitlements` sidecar、构建 manifest 和 IPA 文件清单。unsigned IPA 没有签名，也没有签名后生效的 entitlements；App Group 仅在 sidecar/源码 entitlement 中声明，必须由用户签名时通过匹配的 provisioning profile 授权。工作流修改需在公开仓库 [CN00K/StockMonitorV6](https://github.com/CN00K/StockMonitorV6) 的 `main` 上提交；XcodeGen 生成及 Apple SDK 设备构建由该手动工作流执行。
 
 `Resources/Assets.xcassets/AppIcon.appiconset` 已包含 1024×1024、不透明 RGB PNG 图标：深蓝背景、青绿色雷达与市场走势，无文字。XcodeGen 将该 catalog 作为 App resource，并通过 `ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon` 指定它；iOS 自行应用圆角遮罩。
 
@@ -91,7 +91,7 @@ CLS 依赖可在本机计算的签名参数，站点改版可能使适配器失�
 | 16 | 部分完成 | Settings 有显式通知授权和未读信号投递入口；不会自动弹授权或投递，投递按钮须先获授权。`UNUserNotificationCenter` action delegate 与 snooze/mark-read 行为仍未接线，UI 明确提示限制。 |
 | 17 | 部分完成 | App backtest 只读取现有 SQLite 日线缓存，不主动联网拉取；A 股交易模拟仍需调用方 opt-in 桥接因子选股，历史成分股/公司行动限制不变。 |
 | 18 | 部分完成 | 除 quote/资金流/clist/F10/pool 外，新增 trends2、daily kline、CNINFO SZSE 股票映射、澎湃、gov.cn 与龙虎榜六个真实响应 fixture 及 hash/解析测试；CLS 和可用 CNINFO 公告 row fixture 仍缺。 |
-| 19 | 已实现 | Linux SwiftPM test workflow 与既有手动 iOS IPA workflow 均存在；自动 push 构建关闭，本轮未触发任何 CI/IPA build。 |
+| 19 | 已实现 | Linux SwiftPM test workflow 与手动 iOS IPA workflow 均存在；自动 push 构建关闭。本轮通过 Codemagic 手动运行 `unsigned-ios`（M2），成功生成未签名 arm64 IPA；没有独立 macOS archive/export/release workflow。 |
 | 20 | 已实现（待设备验收） | SwiftUI App 壳、六标签导航、route/deep-link/command palette、Market/Watch/News/Lab 页面、XcodeGen、Info.plist、entitlements、Bundle ID/App Group 与 SQLite 路径已存在；App Group 容器不可用时改存本 App 私有 Application Support，所有标签页显示不共享警告；尚无 Apple SDK/真机验证。 |
 | 21 | 部分完成 | 结构化 redacted logger、Apple `os.Logger` sink、allowlist JSON 诊断 bundle 和 Settings 内的诊断文件分享入口已实现；文件仅包含版本、来源状态计数与本机健康汇总，运行时日志调用点尚未覆盖全部采集/存储路径。 |
 | 22 | 已实现（报价源） | Sina、Eastmoney、Tencent 报价请求已带 User-Agent 和 Accept/压缩协商头；仍可能被站点策略拦截。 |
@@ -132,7 +132,7 @@ CLS 依赖可在本机计算的签名参数，站点改版可能使适配器失�
 | C-4 港美股/ETF | 部分完成 | 只有 venue/secid/time-zone 元数据；真实 quote/kline provider、单时区 MarketClock 扩展和假日历未完成。 |
 | C-5 行业成分映射 | 部分完成 | 现有 SectorTagger 是标题关键词标签，不是权威代码→行业/板块成分表。 |
 | C-6 Level-2 限制 | 已实现（代码） | Market/Watch 顶部明确标注轮询快照、不含逐笔/完整回放/Level-2；Apple 视觉验收待完成。 |
-| D-1 CI | 部分完成 | Linux SwiftPM test workflow 与手动 unsigned IPA workflow 存在；没有独立 macOS archive/export/release workflow，本轮未触发任何 CI/IPA build。 |
+| D-1 CI | 部分完成 | Linux SwiftPM test workflow 与手动 unsigned IPA workflow 存在；自动 push 构建关闭。本轮通过 Codemagic 手动运行 `unsigned-ios`（M2，30 分钟上限），成功生成未签名 arm64 IPA；没有独立 macOS archive/export/release workflow。 |
 | D-2 XcodeGen | 已实现 | 根目录 `project.yml` 已存在并用于既有工程生成。 |
 | D-3 App target/router | 已实现（待 Apple 验收） | `stockmonitor://` scheme 已注册；经校验的 tab/stock deep link、六标签路由和 command palette 已接入 shell。已在自选中的股票路由到 Monitor；未在自选中的安全六位代码路由到 Watchlist 并预填输入框，不会自动添加；冷启动路由等待本地会话恢复后再解析。未在 Xcode/设备验证 URL 启动行为；未知 URL 仅显示通用提示，不回显 query。 |
 | D-4 Info/entitlements | 部分完成 | Info.plist、App Group entitlement 与 Keychain adapter 存在；没有显式共享 Keychain access group，iOS signing entitlement 仍待设备验证。 |
