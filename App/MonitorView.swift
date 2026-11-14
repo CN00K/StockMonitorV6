@@ -98,6 +98,11 @@ final class MonitorViewModel: ObservableObject {
     private let runtime: StockMonitorFunctionalRuntime
     private let engine: LiveEngine
     private let monitorStore: any MonitorStore
+    var storageWarningMessage: String? {
+        guard case let .privateApplicationSupport(unavailableAppGroupIdentifier) = runtime.store.storageMode,
+              let unavailableAppGroupIdentifier else { return nil }
+        return "共享 App Group 容器不可用（ID：\(unavailableAppGroupIdentifier)）。SQLite 已保存到本 App 的私有 Application Support；数据不会与扩展或其他 App 共享。请确认签名配置授权了此 App Group。"
+    }
     private var refreshTask: Task<Void, Never>?
     private var eventRefreshTask: Task<Void, Never>?
     private var recentEventsTask: Task<Void, Never>?

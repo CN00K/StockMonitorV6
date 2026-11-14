@@ -159,10 +159,17 @@ public enum StoreError: Error, LocalizedError {
     }
 }
 
-/// SQLite is confined to an actor and stays in the local app/App Group container.
+public enum SQLiteStoreStorageMode: Sendable, Equatable {
+    case appGroup(identifier: String)
+    case privateApplicationSupport(unavailableAppGroupIdentifier: String?)
+    case customDatabaseURL
+}
+
+/// SQLite uses the App Group container when available; otherwise it remains in this app's
+/// private Application Support directory. `storageMode` lets the UI state that it is not shared.
 public actor SQLiteMonitorStore: MonitorStore {
     private let databaseURL: URL
-    private let unavailableAppGroupIdentifier: String?
+    public nonisolated let storageMode: SQLiteStoreStorageMode
     private let maximumQuoteRows: Int
     private let maximumLiveTickStatusRows: Int
     private let maximumPortableHistoryMinuteRows: Int
@@ -178,7 +185,8 @@ public actor SQLiteMonitorStore: MonitorStore {
                 maximumQuoteRows: Int = 250_000, maximumLiveTickStatusRows: Int = 10_000,
                 maximumPortableHistoryMinuteRows: Int = 100_000,
                 maximumPortableHistoryDailyRows: Int = 100_000,
-                maximumPortableHistoryBytes: Int = 16 * 1_024 * 1_024) {
+                maximumPortableHistoryBytes: Int = 16 * 1_024 * 1_024,
+                applicationSupportDirectoryURL: URL? = nil) {
         self.maximumQuoteRows = max(1, maximumQuoteRows)
         self.maximumLiveTickStatusRows = max(1, maximumLiveTickStatusRows)
         self.maximumPortableHistoryMinuteRows = max(1, maximumPortableHistoryMinuteRows)
@@ -186,7 +194,7 @@ public actor SQLiteMonitorStore: MonitorStore {
         self.maximumPortableHistoryBytes = max(1, maximumPortableHistoryBytes)
         if let databaseURL {
             self.databaseURL = databaseURL
-            self.unavailableAppGroupIdentifier = nil
+            self.storageMode = .customDatabaseURL
         } else {
 #if os(iOS) || os(macOS)
             let groupContainer = appGroupIdentifier.flatMap {
@@ -195,13 +203,16 @@ public actor SQLiteMonitorStore: MonitorStore {
 #else
             let groupContainer: URL? = nil
 #endif
-            let localContainer = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            self.databaseURL = (groupContainer ?? localContainer).appendingPathComponent("Monitor.sqlite", isDirectory: false)
-#if os(iOS)
-            self.unavailableAppGroupIdentifier = appGroupIdentifier != nil && groupContainer == nil ? appGroupIdentifier : nil
-#else
-            self.unavailableAppGroupIdentifier = nil
-#endif
+            if let groupContainer, let appGroupIdentifier {
+                self.databaseURL = groupContainer.appendingPathComponent("Monitor.sqlite", isDirectory: false)
+                self.storageMode = .appGroup(identifier: appGroupIdentifier)
+            } else {
+                let localContainer = applicationSupportDirectoryURL
+                    ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                self.databaseURL = localContainer.appendingPathComponent("Monitor.sqlite", isDirectory: false)
+                self.storageMode = .privateApplicationSupport(
+                    unavailableAppGroupIdentifier: appGroupIdentifier)
+            }
         }
         encoder.dateEncodingStrategy = .iso8601
         decoder.dateDecodingStrategy = .iso8601
@@ -210,9 +221,6 @@ public actor SQLiteMonitorStore: MonitorStore {
     deinit { if let db { sqlite3_close(db) } }
 
     public func open() async throws {
-        if let identifier = unavailableAppGroupIdentifier {
-            throw StoreError.open("Configured App Group '\(identifier)' is unavailable; refusing private-container fallback.")
-        }
         guard db == nil else { return }
         try FileManager.default.createDirectory(at: databaseURL.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)

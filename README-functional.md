@@ -37,7 +37,7 @@ CLS 依赖可在本机计算的签名参数，站点改版可能使适配器失�
 
 分钟历史补齐的是服务返回的分钟 bars，不是逐笔或完整事件回放；分钟内所有离线异动不能保证恢复。盘中极值仅从本地实际观察到的数据建立，不能推断离线时段高低点。交易日历内置 2022–2026 年经上交所官方年度公告核实的工作日休市日期；深交所原文可直接交叉核验的范围为 2024 全年及 2026 中秋/国庆，其他深交所来源缺口见 [`SOURCE_EVIDENCE.md`](SOURCE_EVIDENCE.md)。Settings 可导入带来源字段的本地 JSON：只接受 HTTPS 上交所/深交所/北交所域名，只写入明示闭市日期并持久保存在本机；导入内容不经 App 独立认证，缺失日期仍 unknown，也没有自动联网更新。周末固定休市；Live Loop 不会假定开市。
 
-前台请求会将必要的查询参数（例如所选深交所股票代码）直接发给对应公开数据源；内容和 SQLite 数据仅在本机/App Group 保存。本 App 仅供信息整理与研究，不构成投资建议。
+前台请求会将必要的查询参数（例如所选深交所股票代码）直接发给对应公开数据源。功能数据仅保存在本机；SQLite 优先使用 App Group 容器，若系统无法取得该容器，则退回到本 App 私有的 Application Support，并在所有标签页显示降级警告。私有回退数据不会与扩展或其他 App 共享。本 App 仅供信息整理与研究，不构成投资建议。
 
 ## 测试与构建
 
@@ -55,8 +55,8 @@ CLS 依赖可在本机计算的签名参数，站点改版可能使适配器失�
 
 ## 已选标识、仓库与 Apple 环境验收
 
-- **仓库：** 项目位于私有 [CN00K/StockMonitorV6](https://github.com/CN00K/StockMonitorV6)，初始 `main` 提交为 `aceb771ace6c2023181f74a3c5e58f37418ee76f`。
-- **App 标识：** App Bundle ID 为 `com.cn00k.stockmonitorv6`，核心 framework 标识为 `com.cn00k.stockmonitorv6.core`，App Group 为 `group.com.cn00k.stockmonitorv6`。工程配置、entitlements 和 SQLite 路径必须保持一致；iOS 上若显式配置的 App Group 容器不可用，Store 现在拒绝打开数据库，不会静默回退到 app-private 路径。仍需在 Apple Developer 中核对对应 App ID 与 App Group 能力。
+- **仓库：** 项目位于公开仓库 [CN00K/StockMonitorV6](https://github.com/CN00K/StockMonitorV6) 的 `main` 分支。
+- **App 标识：** App Bundle ID 为 `com.cn00k.stockmonitorv6`，核心 framework 标识为 `com.cn00k.stockmonitorv6.core`，App Group 为 `group.com.cn00k.stockmonitorv6`。工程配置、entitlements 和 SQLite 路径保持这些标识不变。若 iOS 无法取得配置的 App Group 容器，SQLite 会保存在本 App 私有 Application Support 中，并在 UI 明确说明数据不共享；该回退不会改变 App Group entitlement，也不会伪称正在使用共享容器。仍需在 Apple Developer 中核对对应 App ID 与 App Group 能力。
 - **签名与分发：** 当前目标为 unsigned iOS 设备 IPA，由用户用自己的证书签名。workflow 不需要 Apple Team ID、P12、P12 密码或 provisioning profile，仓库不需要为该 workflow 配置这些签名 secrets。unsigned IPA 在签名之前不能安装；签名时，用户自己的 Apple Developer team 必须能注册 `com.cn00k.stockmonitorv6` 与 `group.com.cn00k.stockmonitorv6`，并提供匹配 Bundle ID、授权该 App Group 且包含目标设备 UDID 的 provisioning profile。artifact 同时给出 entitlement sidecar 供签名时使用。
 - **Apple 验收：** workflow 只生成未签名 arm64 IPA；它不执行签名或设备安装。用户签名后仍需在目标 iOS 设备验证 Keychain、App Group、资源加载、前后台暂停/恢复、网络和分享。App Group 在未签名 IPA 中不会作为有效签名 entitlement 生效。
 - **LLM Provider：** 必须在设备 App 内配置兼容 Structured Outputs 的 HTTPS `/chat/completions` endpoint、model ID 和 API key，并自行核对 Provider 价格/限额。股票 Analyst 仍要求明确触发与确认；自动事件补充由 App 的显式资讯刷新触发，仅对 tier policy 指定事件调用，并且只在 App 启动时 endpoint/model/Keychain key 已可用时装配。设置更改下次启动生效；开发测试不调用 Provider。
@@ -92,7 +92,7 @@ CLS 依赖可在本机计算的签名参数，站点改版可能使适配器失�
 | 17 | 部分完成 | App backtest 只读取现有 SQLite 日线缓存，不主动联网拉取；A 股交易模拟仍需调用方 opt-in 桥接因子选股，历史成分股/公司行动限制不变。 |
 | 18 | 部分完成 | 除 quote/资金流/clist/F10/pool 外，新增 trends2、daily kline、CNINFO SZSE 股票映射、澎湃、gov.cn 与龙虎榜六个真实响应 fixture 及 hash/解析测试；CLS 和可用 CNINFO 公告 row fixture 仍缺。 |
 | 19 | 已实现 | Linux SwiftPM test workflow 与既有手动 iOS IPA workflow 均存在；自动 push 构建关闭，本轮未触发任何 CI/IPA build。 |
-| 20 | 已实现（待设备验收） | SwiftUI App 壳、六标签导航、route/deep-link/command palette、Market/Watch/News/Lab 页面、XcodeGen、Info.plist、entitlements、Bundle ID/App Group 与 SQLite 路径已存在；App Group 缺失时 iOS Store fail closed；尚无 Apple SDK/真机验证。 |
+| 20 | 已实现（待设备验收） | SwiftUI App 壳、六标签导航、route/deep-link/command palette、Market/Watch/News/Lab 页面、XcodeGen、Info.plist、entitlements、Bundle ID/App Group 与 SQLite 路径已存在；App Group 容器不可用时改存本 App 私有 Application Support，所有标签页显示不共享警告；尚无 Apple SDK/真机验证。 |
 | 21 | 部分完成 | 结构化 redacted logger、Apple `os.Logger` sink、allowlist JSON 诊断 bundle 和 Settings 内的诊断文件分享入口已实现；文件仅包含版本、来源状态计数与本机健康汇总，运行时日志调用点尚未覆盖全部采集/存储路径。 |
 | 22 | 已实现（报价源） | Sina、Eastmoney、Tencent 报价请求已带 User-Agent 和 Accept/压缩协商头；仍可能被站点策略拦截。 |
 | 23 | 部分完成 | ETag/Last-Modified 条件请求与 gzip 解压缓存已接入报价及部分 clist 请求；没有对所有 event/history endpoints 全覆盖。 |
@@ -136,7 +136,7 @@ CLS 依赖可在本机计算的签名参数，站点改版可能使适配器失�
 | D-2 XcodeGen | 已实现 | 根目录 `project.yml` 已存在并用于既有工程生成。 |
 | D-3 App target/router | 已实现（待 Apple 验收） | `stockmonitor://` scheme 已注册；经校验的 tab/stock deep link、六标签路由和 command palette 已接入 shell。已在自选中的股票路由到 Monitor；未在自选中的安全六位代码路由到 Watchlist 并预填输入框，不会自动添加；冷启动路由等待本地会话恢复后再解析。未在 Xcode/设备验证 URL 启动行为；未知 URL 仅显示通用提示，不回显 query。 |
 | D-4 Info/entitlements | 部分完成 | Info.plist、App Group entitlement 与 Keychain adapter 存在；没有显式共享 Keychain access group，iOS signing entitlement 仍待设备验证。 |
-| D-5 App Group 路径 | 已实现（待设备验收） | iOS Store 通过 group container 取 SQLite 路径；显式 group 不可用时 fail closed，不静默改写 app-private 数据。 |
+| D-5 App Group 路径 | 已实现（待设备验收） | iOS Store 优先通过 group container 取 SQLite 路径；若容器不可用则写入本 App 私有 Application Support，UI 明确告知数据不与扩展或其他 App 共享；App Group entitlement 保持原值。 |
 | D-6 录制 fixtures | 部分完成 | 新增 6 个 HTTP-200 真实 raw 响应及 sidecar/parser tests：Eastmoney trends2、daily kline、CNINFO SZSE stock map、The Paper、gov.cn 与 Eastmoney 龙虎榜。CNINFO 公告查询未得可用 row list，CLS 未绕过不可用状态；pool 仍为 null。 |
 | D-7 Apple 设备验收 | 待外部环境 | 当前环境无 Apple SDK/真机，CSQLite 链接、Keychain entitlement、盘中 CPU/内存均未实测。 |
 | D-8 2027 日历 | 部分完成 | Settings 支持导入受限大小的本地 JSON，HTTPS 来源 host 限于 SSE/SZSE/BSE，payload 会本机持久保存；2027 未列闭市日期仍 unknown。导入内容非签名验证，无自动更新，需人工对照原公告。 |

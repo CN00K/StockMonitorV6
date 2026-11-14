@@ -151,18 +151,25 @@ final class SQLitePortableBackupTests: XCTestCase {
         XCTAssertEqual(afterSessionClosed, usage)
     }
 
-#if os(iOS)
-    func testUnavailableConfiguredAppGroupDoesNotFallBackToPrivateStorage() async throws {
-        let store = SQLiteMonitorStore(appGroupIdentifier: "group.cn00k.stockmonitorv6.test.missing")
-        do {
-            try await store.open()
-            XCTFail("A missing configured App Group must fail closed")
-        } catch let error as StoreError {
-            guard case let .open(message) = error else { return XCTFail("Unexpected StoreError") }
-            XCTAssertTrue(message.contains("refusing private-container fallback"))
-        }
+    func testUnavailableConfiguredAppGroupUsesPrivateApplicationSupportFallback() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sqlite-app-group-fallback-\(UUID().uuidString)", isDirectory: true)
+        let applicationSupport = root.appendingPathComponent("Application Support", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let missingGroup = "group.cn00k.stockmonitorv6.test.missing"
+        let store = SQLiteMonitorStore(appGroupIdentifier: missingGroup,
+                                       applicationSupportDirectoryURL: applicationSupport)
+
+        XCTAssertEqual(store.storageMode,
+                       .privateApplicationSupport(unavailableAppGroupIdentifier: missingGroup))
+        try await store.open()
+        try await store.setWatchCodes(["600000"])
+        let restored = try await store.restoreState()
+
+        XCTAssertEqual(restored.watchCodes, ["600000"])
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: applicationSupport.appendingPathComponent("Monitor.sqlite").path))
     }
-#endif
 
     private func makeStore(_ name: String, minuteRows: Int = 100_000, dailyRows: Int = 100_000,
                            historyBytes: Int = 16 * 1_024 * 1_024) throws -> SQLiteMonitorStore {

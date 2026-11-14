@@ -46,22 +46,38 @@ struct StockMonitorTabShell: View {
         .toolbarBackground(appearance.palette.paper1, for: .tabBar)
         .toolbarBackground(.visible, for: .tabBar)
         .stockMonitorAppearance(appearance)
-        .safeAreaInset(edge: .top, spacing: StockMonitorTokens.Space.small) {
-            HStack {
-                Spacer(minLength: StockMonitorTokens.Space.small)
-                Button {
-                    isCommandPalettePresented = true
-                } label: {
-                    Label("命令", systemImage: "command")
-                        .frame(minWidth: StockMonitorTokens.Size.minimumHitTarget,
-                               minHeight: StockMonitorTokens.Size.minimumHitTarget)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                if let warning = model.storageWarningMessage {
+                    HStack(alignment: .top, spacing: StockMonitorTokens.Space.small) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                        Text(warning)
+                            .font(.system(size: StockMonitorTokens.TypeScale.body, weight: .semibold))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .foregroundStyle(Color.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, StockMonitorTokens.Space.large)
+                    .padding(.vertical, StockMonitorTokens.Space.medium)
+                    .background(Color.orange.opacity(0.14))
+                    .accessibilityElement(children: .combine)
                 }
-                .keyboardShortcut("k", modifiers: [.command])
-                .accessibilityLabel("打开命令面板")
-                .accessibilityHint("用键盘或点按选择标签，也可输入六位证券代码")
-                .padding(.trailing, StockMonitorTokens.Space.small)
+                HStack {
+                    Spacer(minLength: StockMonitorTokens.Space.small)
+                    Button {
+                        isCommandPalettePresented = true
+                    } label: {
+                        Label("命令", systemImage: "command")
+                            .frame(minWidth: StockMonitorTokens.Size.minimumHitTarget,
+                                   minHeight: StockMonitorTokens.Size.minimumHitTarget)
+                    }
+                    .keyboardShortcut("k", modifiers: [.command])
+                    .accessibilityLabel("打开命令面板")
+                    .accessibilityHint("用键盘或点按选择标签，也可输入六位证券代码")
+                    .padding(.trailing, StockMonitorTokens.Space.small)
+                }
+                .background(appearance.palette.paper0)
             }
-            .background(appearance.palette.paper0)
         }
         .sheet(isPresented: $isCommandPalettePresented) {
             CommandPaletteView(onRoute: apply)
