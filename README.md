@@ -153,3 +153,10 @@ CLS 依赖可在本机计算的签名参数，站点改版可能使适配器失�
 - `App/DesignSystem/ComponentSkeletons.swift` 提供 32 项基础组件骨架目录、Surface/Metric/Provenance 复用组件，以及 loading、empty、partial、error、stale 五类明确数据状态；`App/Previews/DesignSystemPreviewGallery.swift` 展示四态图库、额外 stale/provenance 示例与两套主题预览。
 - `App/Charts/StockChartTheme.swift` 集中图表色彩角色、用 quantile bucket 选择 heat 色、用线性阈值位置绘制 marker，并格式化 CNY/股数/百分比及 Asia/Shanghai 时间。纯 Swift `VisualizationMapping` 不依赖 SwiftUI，覆盖 treemap 面积分配、quantile tie 处理、threshold axis clamp 与 LTTB 降采样测试，继续包含在 UI-free functional-source ZIP 中。
 - `App/Views/StockMonitorTabShell.swift` 提供六标签入口；Market 展示核心指数与真实扫描样本并声明样本覆盖，Watch 展示自选报价/来源/限价状态，News 提供本地摘要、FTS 搜索、近 7 天事件的类型/P1–P3/自选相关筛选、逐源状态和本机日报 PDF 分享。筛选只作用于最近最多 100 条本机事件，自选相关只匹配事件已有证券标签。Lab 有单因子回测、分层风险统计、bootstrap 包络、只读缓存相关性配对、治理/tick/情绪/因子/关系图面板和既有 Analyst。Settings 提供本地日历 JSON 导入、显式最多 10 只当前 F10 快照刷新、用户触发的本机通知授权/未读信号投递和白名单诊断 JSON 分享。加密备份仍无安全口令派生与文件导入/导出 UI；通知 action delegate 未接线，32 个骨架不是完整业务组件。SwiftUI 当前只经语法解析，仍需 Xcode 编译、Preview 与设备视觉验收。
+
+
+## 本轮 UI 更新与未签名构建
+
+- App Group 不可用时，顶栏默认显示紧凑的一行“仅保存在本 App · 不与其他 App 共享”；点按可展开容器 ID、故障原因及私有 Application Support 回退说明。
+- 源码提交：`a66024a95559f570e8571c407c0894978090925e`。Codemagic `unsigned-ios` 在个人账户的 `mac_mini_m2` 上从 `main` 成功构建，build ID 为 `6af829cd90e83b09c4fa21fc`。
+- 验证：259 项 Swift 测试通过，21 个 App Swift 文件解析通过；交付 IPA 的 Bundle ID 为 `com.cn00k.stockmonitorv6`、架构为 arm64，且不含代码签名目录或 provisioning profile。
