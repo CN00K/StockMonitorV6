@@ -18,6 +18,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.cn00k.stockmonitorv6.core
         DEFINES_MODULE: YES
+        GENERATE_INFOPLIST_FILE: YES
         SKIP_INSTALL: YES
         OTHER_LDFLAGS: "$(inherited) -lsqlite3"
   MonitorApp:
