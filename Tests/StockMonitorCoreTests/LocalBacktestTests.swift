@@ -78,4 +78,37 @@ final class LocalBacktestTests: XCTestCase {
         XCTAssertNil(one.meanIC)
         XCTAssertTrue(one.strata.isEmpty)
     }
+
+    func testPerformanceAnalyzerCalculatesRiskAndMonthlyMetricsFromRealCurve() {
+        let curve = [1.0, 1.1, 0.99, 1.0395]
+        let stratum = LocalBacktestStratum(index: 1, sampleCount: 3,
+            averageDailyReturn: nil, cumulativeReturn: 0.0395,
+            equityCurve: curve, equityCurveDates: [date(1), date(2), date(3)])
+
+        let metrics = LocalBacktestPerformanceAnalyzer.analyze(stratum)
+        XCTAssertEqual(metrics.observationCount, 3)
+        XCTAssertEqual(metrics.cumulativeReturn!, 0.0395, accuracy: 1e-12)
+        XCTAssertEqual(metrics.maximumDrawdown!, 0.1, accuracy: 1e-12)
+        XCTAssertEqual(metrics.winRate!, 2.0 / 3.0, accuracy: 1e-12)
+        XCTAssertEqual(metrics.profitLossRatio!, 0.75, accuracy: 1e-12)
+        XCTAssertNotNil(metrics.annualizedReturn)
+        XCTAssertNotNil(metrics.annualizedVolatility)
+        XCTAssertNotNil(metrics.sharpeRatioZeroRiskFree)
+        XCTAssertNotNil(metrics.calmarRatio)
+        XCTAssertEqual(metrics.returnP50!, 0.05, accuracy: 1e-12)
+        XCTAssertEqual(metrics.monthlyReturns.count, 1)
+        XCTAssertEqual(metrics.monthlyReturns[0].month, "2024-01")
+        XCTAssertEqual(metrics.monthlyReturns[0].returnFraction, 0.0395, accuracy: 1e-12)
+    }
+
+    func testPerformanceAnalyzerLeavesUndefinedRatiosUnknown() {
+        let stratum = LocalBacktestStratum(index: 1, sampleCount: 2,
+            averageDailyReturn: nil, cumulativeReturn: 0.21,
+            equityCurve: [1, 1.1, 1.21], equityCurveDates: [date(1), date(2)])
+
+        let metrics = LocalBacktestPerformanceAnalyzer.analyze(stratum)
+        XCTAssertNil(metrics.profitLossRatio) // there were no losing sessions
+        XCTAssertNil(metrics.calmarRatio) // zero drawdown
+        XCTAssertEqual(metrics.monthlyReturns.first?.returnFraction ?? .nan, 0.21, accuracy: 1e-12)
+    }
 }

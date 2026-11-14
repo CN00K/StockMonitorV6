@@ -113,6 +113,50 @@ public enum OnDemandAnalystError: Error, Equatable, Sendable {
     case validationFailed
 }
 
+public struct OnDemandAnalysisOutput: Sendable {
+    public let result: StrategyResult
+    public let usage: AnalystUsageLedger
+
+    public init(result: StrategyResult, usage: AnalystUsageLedger) {
+        self.result = result
+        self.usage = usage
+    }
+}
+
+private actor AnalystUsageAccumulator {
+    private var requestCount = 0
+    private var promptTokens: Int?
+    private var completionTokens: Int?
+    private var totalTokens: Int?
+
+    func record(response: Data) {
+        requestCount += 1
+        guard let root = try? JSONSerialization.jsonObject(with: response) as? [String: Any],
+              let usage = root["usage"] as? [String: Any] else { return }
+        promptTokens = Self.add(promptTokens, Self.nonNegativeInt(usage["prompt_tokens"]))
+        completionTokens = Self.add(completionTokens, Self.nonNegativeInt(usage["completion_tokens"]))
+        totalTokens = Self.add(totalTokens, Self.nonNegativeInt(usage["total_tokens"]))
+    }
+
+    func snapshot() -> AnalystUsageLedger {
+        AnalystUsageLedger(requestCount: requestCount, promptTokenCount: promptTokens,
+                           completionTokenCount: completionTokens, totalTokenCount: totalTokens)
+    }
+
+    private static func nonNegativeInt(_ value: Any?) -> Int? {
+        guard let number = value as? NSNumber else { return nil }
+        let double = number.doubleValue
+        guard double.isFinite, double >= 0, double <= Double(Int.max), double.rounded() == double else { return nil }
+        return Int(double)
+    }
+
+    private static func add(_ current: Int?, _ next: Int?) -> Int? {
+        guard let next else { return current }
+        let (sum, overflow) = (current ?? 0).addingReportingOverflow(next)
+        return overflow ? Int.max : sum
+    }
+}
+
 public struct AnalystSupervisorResponse: Codable, Sendable, Equatable {
     public let signal: String
     public let confidence: Double
@@ -134,6 +178,11 @@ public struct OnDemandAnalyst: Sendable {
 
     public func analyze(context: AnalystContext, configuration: OnDemandAnalystConfiguration,
                        apiKey: String) async throws -> StrategyResult {
+        try await analyzeWithUsage(context: context, configuration: configuration, apiKey: apiKey).result
+    }
+
+    public func analyzeWithUsage(context: AnalystContext, configuration: OnDemandAnalystConfiguration,
+                                 apiKey: String) async throws -> OnDemandAnalysisOutput {
         guard configuration.endpoint.scheme?.lowercased() == "https",
               configuration.endpoint.host != nil,
               configuration.endpoint.user == nil, configuration.endpoint.password == nil,
@@ -160,38 +209,41 @@ public struct OnDemandAnalyst: Sendable {
         }
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw OnDemandAnalystError.invalidAPIKey }
 
-        async let supervisor = requestSupervisor(context: context, configuration: configuration, apiKey: apiKey)
-        async let technical = requestSpecialist(kind: "technical", context: context, configuration: configuration, apiKey: apiKey)
-        async let fundamental = requestSpecialist(kind: "fundamental", context: context, configuration: configuration, apiKey: apiKey)
-        async let sentiment = requestSpecialist(kind: "sentiment", context: context, configuration: configuration, apiKey: apiKey)
-        async let risk = requestSpecialist(kind: "risk", context: context, configuration: configuration, apiKey: apiKey)
+        let usage = AnalystUsageAccumulator()
+        async let supervisor = requestSupervisor(context: context, configuration: configuration, apiKey: apiKey, usage: usage)
+        async let technical = requestSpecialist(kind: "technical", context: context, configuration: configuration, apiKey: apiKey, usage: usage)
+        async let fundamental = requestSpecialist(kind: "fundamental", context: context, configuration: configuration, apiKey: apiKey, usage: usage)
+        async let sentiment = requestSpecialist(kind: "sentiment", context: context, configuration: configuration, apiKey: apiKey, usage: usage)
+        async let risk = requestSpecialist(kind: "risk", context: context, configuration: configuration, apiKey: apiKey, usage: usage)
         let (lead, tech, fund, sent, riskResult) = try await (supervisor, technical, fundamental, sentiment, risk)
         try Task.checkCancellation()
-        return try await requestRefinement(context: context, supervisor: lead, technical: tech,
+        let result = try await requestRefinement(context: context, supervisor: lead, technical: tech,
                                            fundamental: fund, sentiment: sent, risk: riskResult,
-                                           configuration: configuration, apiKey: apiKey)
+                                           configuration: configuration, apiKey: apiKey, usage: usage)
+        return OnDemandAnalysisOutput(result: result, usage: await usage.snapshot())
     }
 
     private func requestSupervisor(context: AnalystContext, configuration: OnDemandAnalystConfiguration,
-                                   apiKey: String) async throws -> AnalystSupervisorResponse {
+                                   apiKey: String, usage: AnalystUsageAccumulator) async throws -> AnalystSupervisorResponse {
         let instruction = "Act as supervisor. Use only supplied facts, history, and events; never invent facts. Label missing fields as missing. Include risk in summary. This is not investment advice. Return only the requested JSON object."
         let contextJSON = try encodedContext(context)
         return try await send(schema: Self.supervisorSchema, system: instruction, user: contextJSON,
-                              configuration: configuration, apiKey: apiKey)
+                              configuration: configuration, apiKey: apiKey, usage: usage)
     }
 
     private func requestSpecialist(kind: String, context: AnalystContext, configuration: OnDemandAnalystConfiguration,
-                                   apiKey: String) async throws -> AnalystSpecialistResponse {
+                                   apiKey: String, usage: AnalystUsageAccumulator) async throws -> AnalystSpecialistResponse {
         let instruction = "Act as the \(kind) specialist. Use only supplied facts, history, and events; never invent facts. Label missing fields as missing. Include relevant risks and say when evidence is insufficient. This is not investment advice. Return only the requested JSON object."
         let contextJSON = try encodedContext(context)
         return try await send(schema: Self.specialistSchema, system: instruction, user: contextJSON,
-                              configuration: configuration, apiKey: apiKey)
+                              configuration: configuration, apiKey: apiKey, usage: usage)
     }
 
     private func requestRefinement(context: AnalystContext, supervisor: AnalystSupervisorResponse,
                                    technical: AnalystSpecialistResponse, fundamental: AnalystSpecialistResponse,
                                    sentiment: AnalystSpecialistResponse, risk: AnalystSpecialistResponse,
-                                   configuration: OnDemandAnalystConfiguration, apiKey: String) async throws -> StrategyResult {
+                                   configuration: OnDemandAnalystConfiguration, apiKey: String,
+                                   usage: AnalystUsageAccumulator) async throws -> StrategyResult {
         let contextJSON = try encodedContext(context)
         let supervisorJSON = try encoded(supervisor)
         let technicalJSON = try encoded(technical)
@@ -201,11 +253,12 @@ public struct OnDemandAnalyst: Sendable {
         let payload = "context=\(contextJSON); supervisor=\(supervisorJSON); technical=\(technicalJSON); fundamental=\(fundamentalJSON); sentiment=\(sentimentJSON); risk=\(riskJSON)"
         let instruction = "Refine the supplied analyses into the exact StrategyResult contract. Never invent facts; label missing fields. Include risk in summary. This is not investment advice. Return only JSON with exactly the schema keys."
         return try await send(schema: Self.resultSchema, system: instruction, user: payload,
-                              configuration: configuration, apiKey: apiKey)
+                              configuration: configuration, apiKey: apiKey, usage: usage)
     }
 
     private func send<T: Decodable>(schema: [String: Any], system: String, user: String,
-                                    configuration: OnDemandAnalystConfiguration, apiKey: String) async throws -> T {
+                                    configuration: OnDemandAnalystConfiguration, apiKey: String,
+                                    usage: AnalystUsageAccumulator) async throws -> T {
         try Task.checkCancellation()
         let body: [String: Any] = ["model": configuration.modelID, "messages": [["role": "system", "content": system], ["role": "user", "content": user]], "response_format": ["type": "json_schema", "json_schema": ["name": "analysis", "strict": true, "schema": schema]]]
         let data = try JSONSerialization.data(withJSONObject: body)
@@ -217,6 +270,7 @@ public struct OnDemandAnalyst: Sendable {
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         let response: (Data, HTTPURLResponse)
         do { response = try await transport.send(request) } catch { throw OnDemandAnalystError.network }
+        await usage.record(response: response.0)
         guard (200...299).contains(response.1.statusCode) else { throw OnDemandAnalystError.httpStatus(response.1.statusCode) }
         guard response.0.count <= 1_000_000 else { throw OnDemandAnalystError.invalidResponse }
         guard let content = try? Self.extractContent(response.0) else { throw OnDemandAnalystError.invalidResponse }

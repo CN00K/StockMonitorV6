@@ -40,6 +40,24 @@ public struct RestoredState: Sendable {
     }
 }
 
+public struct MonitorSessionUsage: Sendable, Equatable {
+    public let tickCount: Int
+    public let requestCount: Int
+    public let promptTokenCount: Int?
+    public let completionTokenCount: Int?
+    public let totalTokenCount: Int?
+
+    public init(tickCount: Int = 0, requestCount: Int = 0,
+                promptTokenCount: Int? = nil, completionTokenCount: Int? = nil,
+                totalTokenCount: Int? = nil) {
+        self.tickCount = max(0, tickCount)
+        self.requestCount = max(0, requestCount)
+        self.promptTokenCount = promptTokenCount.map { max(0, $0) }
+        self.completionTokenCount = completionTokenCount.map { max(0, $0) }
+        self.totalTokenCount = totalTokenCount.map { max(0, $0) }
+    }
+}
+
 public protocol MonitorStore: Sendable {
     func open() async throws
     func restoreState() async throws -> RestoredState
@@ -54,6 +72,9 @@ public protocol MonitorStore: Sendable {
     func appendSignals(_ signals: [AlertSignal]) async throws
     func upsertEvents(_ events: [MarketEvent]) async throws
     func fetchEvents(from: Date, to: Date) async throws -> [MarketEvent]
+    func recordEventRejections(_ decisions: [EventRejectionDecision]) async throws
+    func eventRejectionCounts(from: Date, to: Date) async throws -> [String: Int]
+    func eventKeywordFrequencyReport(now: Date, window: TimeInterval, top: Int) async throws -> EventKeywordFrequencyReport
     func searchEvents(matching query: String, limit: Int) async throws -> [MarketEvent]
     func archiveRawResponses(_ responses: [RawEventResponse], at date: Date) async throws -> Int
     func fetchRawArchive(limit: Int) async throws -> [RawResponseArchiveRecord]
@@ -69,6 +90,9 @@ public protocol MonitorStore: Sendable {
     func fetchDailyBars(codes: [String], from: Date, to: Date) async throws -> [DailyBar]
     func beginSession(at date: Date) async throws
     func endSession(at date: Date) async throws
+    func recordSessionActivity(ticks: Int, requests: Int, promptTokens: Int?, completionTokens: Int?, totalTokens: Int?) async throws
+    func recordLiveTickStatus(_ record: LiveTickStatusRecord) async throws
+    func fetchLiveTickStatuses(limit: Int) async throws -> [LiveTickStatusRecord]
     func checkpoint() async throws
 }
 
@@ -77,6 +101,12 @@ public extension MonitorStore {
     func setRuleCheckpoint(_ checkpoint: RuleFamilyCheckpoint) async throws {}
     func upsertEvents(_ events: [MarketEvent]) async throws {}
     func fetchEvents(from: Date, to: Date) async throws -> [MarketEvent] { [] }
+    func recordEventRejections(_ decisions: [EventRejectionDecision]) async throws {}
+    func eventRejectionCounts(from: Date, to: Date) async throws -> [String: Int] { [:] }
+    func eventKeywordFrequencyReport(now: Date = Date(), window: TimeInterval = 24 * 60 * 60,
+                                     top: Int = 100) async throws -> EventKeywordFrequencyReport {
+        EventKeywordFrequencyReport.compare(events: [], now: now, window: window, top: top)
+    }
     func searchEvents(matching query: String) async throws -> [MarketEvent] {
         try await searchEvents(matching: query, limit: 50)
     }
@@ -109,6 +139,10 @@ public extension MonitorStore {
     func fetchRecentQuotes(codes: [String], since: Date) async throws -> [Quote] { [] }
     func upsertDailyBars(_ bars: [DailyBar]) async throws {}
     func fetchDailyBars(codes: [String], from: Date, to: Date) async throws -> [DailyBar] { [] }
+    func recordSessionActivity(ticks: Int, requests: Int, promptTokens: Int?,
+                               completionTokens: Int?, totalTokens: Int?) async throws {}
+    func recordLiveTickStatus(_ record: LiveTickStatusRecord) async throws {}
+    func fetchLiveTickStatuses(limit: Int) async throws -> [LiveTickStatusRecord] { [] }
 }
 
 public enum StoreError: Error, LocalizedError {
@@ -128,7 +162,12 @@ public enum StoreError: Error, LocalizedError {
 /// SQLite is confined to an actor and stays in the local app/App Group container.
 public actor SQLiteMonitorStore: MonitorStore {
     private let databaseURL: URL
+    private let unavailableAppGroupIdentifier: String?
     private let maximumQuoteRows: Int
+    private let maximumLiveTickStatusRows: Int
+    private let maximumPortableHistoryMinuteRows: Int
+    private let maximumPortableHistoryDailyRows: Int
+    private let maximumPortableHistoryBytes: Int
     private var db: OpaquePointer?
     private var rowsSincePrune = 0
     private let encoder = JSONEncoder()
@@ -136,10 +175,18 @@ public actor SQLiteMonitorStore: MonitorStore {
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
     public init(databaseURL: URL? = nil, appGroupIdentifier: String? = "group.com.cn00k.stockmonitorv6",
-                maximumQuoteRows: Int = 250_000) {
+                maximumQuoteRows: Int = 250_000, maximumLiveTickStatusRows: Int = 10_000,
+                maximumPortableHistoryMinuteRows: Int = 100_000,
+                maximumPortableHistoryDailyRows: Int = 100_000,
+                maximumPortableHistoryBytes: Int = 16 * 1_024 * 1_024) {
         self.maximumQuoteRows = max(1, maximumQuoteRows)
+        self.maximumLiveTickStatusRows = max(1, maximumLiveTickStatusRows)
+        self.maximumPortableHistoryMinuteRows = max(1, maximumPortableHistoryMinuteRows)
+        self.maximumPortableHistoryDailyRows = max(1, maximumPortableHistoryDailyRows)
+        self.maximumPortableHistoryBytes = max(1, maximumPortableHistoryBytes)
         if let databaseURL {
             self.databaseURL = databaseURL
+            self.unavailableAppGroupIdentifier = nil
         } else {
 #if os(iOS) || os(macOS)
             let groupContainer = appGroupIdentifier.flatMap {
@@ -150,6 +197,11 @@ public actor SQLiteMonitorStore: MonitorStore {
 #endif
             let localContainer = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             self.databaseURL = (groupContainer ?? localContainer).appendingPathComponent("Monitor.sqlite", isDirectory: false)
+#if os(iOS)
+            self.unavailableAppGroupIdentifier = appGroupIdentifier != nil && groupContainer == nil ? appGroupIdentifier : nil
+#else
+            self.unavailableAppGroupIdentifier = nil
+#endif
         }
         encoder.dateEncodingStrategy = .iso8601
         decoder.dateDecodingStrategy = .iso8601
@@ -158,6 +210,9 @@ public actor SQLiteMonitorStore: MonitorStore {
     deinit { if let db { sqlite3_close(db) } }
 
     public func open() async throws {
+        if let identifier = unavailableAppGroupIdentifier {
+            throw StoreError.open("Configured App Group '\(identifier)' is unavailable; refusing private-container fallback.")
+        }
         guard db == nil else { return }
         try FileManager.default.createDirectory(at: databaseURL.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
@@ -234,6 +289,134 @@ public actor SQLiteMonitorStore: MonitorStore {
             unreadSignals: unread, latestQuotes: latestQuotes, latestIndexQuotes: latestIndices,
             lastQuoteTime: lastTime, lastQuoteTimeByCode: quoteTimes,
             lastMinuteTimestampByCode: minuteTimes, ruleFamilySettings: familySettings, ruleCheckpoint: checkpoint)
+    }
+
+    /// Exports the portable working set. Credentials, API keys, raw responses,
+    /// analyst caches and usage diagnostics are deliberately not represented.
+    public func exportPortableBackupSnapshot(exportedAt: Date = Date()) async throws -> SQLitePortableBackupSnapshot {
+        try ensureOpen()
+        var watchCodes: [String] = []
+        try query("SELECT code FROM watchlist ORDER BY code", bind: { _ in }) { stmt in
+            if let code = Self.columnText(stmt, 0) { watchCodes.append(code) }
+        }
+        var rules: [WatchRule] = []
+        try query("SELECT payload FROM watch_rules ORDER BY id", bind: { _ in }) { stmt in
+            if let payload = Self.columnText(stmt, 0), let value = try? decoder.decode(WatchRule.self, from: Data(payload.utf8)) { rules.append(value) }
+        }
+        var holdings: [Holding] = []
+        try query("SELECT payload FROM positions ORDER BY code", bind: { _ in }) { stmt in
+            if let payload = Self.columnText(stmt, 0), let value = try? decoder.decode(Holding.self, from: Data(payload.utf8)) { holdings.append(value) }
+        }
+        var signals: [AlertSignal] = []
+        var readAt: [UUID: Date] = [:]
+        try query("SELECT payload, read_at FROM signals ORDER BY created_at ASC, id ASC LIMIT \(Self.portableSignalLimit)", bind: { _ in }) { stmt in
+            guard let payload = Self.columnText(stmt, 0), let value = try? decoder.decode(AlertSignal.self, from: Data(payload.utf8)) else { return }
+            signals.append(value)
+            if sqlite3_column_type(stmt, 1) != SQLITE_NULL { readAt[value.id] = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 1)) }
+        }
+        let quotes = try decodePortableQuotes(table: "quotes", limit: maximumQuoteRows)
+        let indexQuotes = try decodePortableQuotes(table: "index_quotes", limit: Self.portableIndexQuoteLimit)
+        var events: [MarketEvent] = []
+        try query("SELECT payload FROM events ORDER BY event_time ASC, id ASC LIMIT \(Self.portableEventLimit)", bind: { _ in }) { stmt in
+            if let payload = Self.columnText(stmt, 0), let value = try? decoder.decode(MarketEvent.self, from: Data(payload.utf8)) { events.append(value) }
+        }
+        var settings: [RuleFamilySettings] = []
+        try query("SELECT payload FROM rule_settings ORDER BY family", bind: { _ in }) { stmt in
+            if let payload = Self.columnText(stmt, 0), let value = try? decoder.decode(RuleFamilySettings.self, from: Data(payload.utf8)) { settings.append(value) }
+        }
+        var checkpoint = RuleFamilyCheckpoint()
+        try query("SELECT payload FROM rule_state WHERE id='families'", bind: { _ in }) { stmt in
+            if let payload = Self.columnText(stmt, 0), let value = try? decoder.decode(RuleFamilyCheckpoint.self, from: Data(payload.utf8)) { checkpoint = value }
+        }
+        let cursors = try portableCursors()
+        let history = try portableHistory()
+        let snapshot = PortableBackupSnapshot(exportedAt: exportedAt, watchCodes: watchCodes,
+            watchRules: rules, holdings: holdings, signals: signals, quotes: quotes,
+            indexQuotes: indexQuotes, events: events,
+            settings: PortableBackupSettings(ruleFamilySettings: settings, ruleCheckpoint: checkpoint,
+                lastQuoteTime: cursors.last, lastQuoteTimeByCode: cursors.quotes,
+                lastMinuteTimestampByCode: cursors.minutes), history: history)
+        try snapshot.validate()
+        return SQLitePortableBackupSnapshot(snapshot: snapshot, signalReadAt: readAt)
+    }
+
+    /// Replaces all portable tables atomically. The snapshot is validated before
+    /// BEGIN IMMEDIATE, so malformed data cannot change the existing database.
+    public func importPortableBackupSnapshot(_ backup: SQLitePortableBackupSnapshot) async throws {
+        try ensureOpen()
+        try backup.validate()
+        let snapshot = backup.snapshot
+        try transaction {
+            for table in ["watchlist", "watch_rules", "positions", "signals", "quotes", "index_quotes", "events", "rule_settings", "rule_state"] {
+                try execute("DELETE FROM \(table);")
+            }
+            if let history = snapshot.history, history.omissionReason == nil {
+                try execute("DELETE FROM minute_bars;")
+                try execute("DELETE FROM daily_bars;")
+            }
+            try execute("DELETE FROM portable_cursors;")
+            for code in Set(snapshot.watchCodes).sorted() {
+                try run("INSERT INTO watchlist(code) VALUES(?)") { bindText(code, to: $0, at: 1) }
+            }
+            for rule in snapshot.watchRules {
+                let payload = try encodedString(rule)
+                try run("INSERT INTO watch_rules(id, payload) VALUES(?, ?)") { bindText(rule.id, to: $0, at: 1); bindText(payload, to: $0, at: 2) }
+            }
+            for holding in snapshot.holdings {
+                let payload = try encodedString(holding)
+                try run("INSERT INTO positions(code, payload) VALUES(?, ?)") { bindText(holding.code, to: $0, at: 1); bindText(payload, to: $0, at: 2) }
+            }
+            for quote in snapshot.quotes where quote.kind == .stock { try insert(quote, into: "quotes") }
+            for quote in snapshot.indexQuotes where quote.kind == .index { try insert(quote, into: "index_quotes") }
+            for signal in snapshot.signals {
+                let payload = try encodedString(signal)
+                try run("INSERT INTO signals(id, created_at, read_at, payload) VALUES(?, ?, ?, ?)") { stmt in
+                    bindText(signal.id.uuidString, to: stmt, at: 1)
+                    sqlite3_bind_double(stmt, 2, signal.createdAt.timeIntervalSince1970)
+                    if let date = backup.signalReadAt[signal.id] { sqlite3_bind_double(stmt, 3, date.timeIntervalSince1970) } else { sqlite3_bind_null(stmt, 3) }
+                    bindText(payload, to: stmt, at: 4)
+                }
+            }
+            for event in snapshot.events {
+                let payload = try encodedString(event)
+                let eventTime = (event.publishedAt ?? event.fetchedAt).timeIntervalSince1970
+                try run("INSERT INTO events(id, event_time, fetched_at, source_id, priority, payload) VALUES(?, ?, ?, ?, ?, ?)") { stmt in
+                    bindText(event.id, to: stmt, at: 1); sqlite3_bind_double(stmt, 2, eventTime)
+                    sqlite3_bind_double(stmt, 3, event.fetchedAt.timeIntervalSince1970); bindText(event.sourceID, to: stmt, at: 4)
+                    sqlite3_bind_int(stmt, 5, Int32(event.priority)); bindText(payload, to: stmt, at: 6)
+                }
+                try insertEventSearchIndex(event)
+            }
+            for setting in snapshot.settings.ruleFamilySettings {
+                let payload = try encodedString(setting)
+                try run("INSERT INTO rule_settings(family, payload) VALUES(?, ?)") { bindText(setting.family.rawValue, to: $0, at: 1); bindText(payload, to: $0, at: 2) }
+            }
+            try saveRuleCheckpoint(snapshot.settings.ruleCheckpoint)
+            if let last = snapshot.settings.lastQuoteTime {
+                try run("INSERT INTO portable_cursors(kind, code, captured_at) VALUES('last', '', ?)") { sqlite3_bind_double($0, 1, last.timeIntervalSince1970) }
+            }
+            for (code, date) in snapshot.settings.lastQuoteTimeByCode {
+                try run("INSERT INTO portable_cursors(kind, code, captured_at) VALUES('quote', ?, ?)") { stmt in
+                    bindText(code, to: stmt, at: 1); sqlite3_bind_double(stmt, 2, date.timeIntervalSince1970)
+                }
+            }
+            for (code, date) in snapshot.settings.lastMinuteTimestampByCode {
+                try run("INSERT INTO portable_cursors(kind, code, captured_at) VALUES('minute', ?, ?)") { stmt in
+                    bindText(code, to: stmt, at: 1); sqlite3_bind_double(stmt, 2, date.timeIntervalSince1970)
+                }
+            }
+            if let history = snapshot.history, history.omissionReason == nil {
+                try insertMinuteBars(history.minuteBars)
+                try insertDailyBars(history.dailyBars)
+            }
+        }
+        rowsSincePrune = 0
+    }
+
+    /// Convenience for callers that have already decrypted and validated the
+    /// standard codec snapshot but have no read-state sidecar.
+    public func importPortableBackupSnapshot(_ snapshot: PortableBackupSnapshot) async throws {
+        try await importPortableBackupSnapshot(SQLitePortableBackupSnapshot(snapshot: snapshot))
     }
 
     public func setWatchCodes(_ codes: [String]) async throws {
@@ -357,6 +540,42 @@ public actor SQLiteMonitorStore: MonitorStore {
             events.append(event)
         }
         return events
+    }
+
+    public func recordEventRejections(_ decisions: [EventRejectionDecision]) async throws {
+        try ensureOpen()
+        guard !decisions.isEmpty else { return }
+        try transaction {
+            for decision in decisions where !decision.eventID.isEmpty && !decision.reason.isEmpty {
+                try run("INSERT INTO event_rejections(event_id, source_id, reason, decided_at) VALUES(?, ?, ?, ?)") { stmt in
+                    bindText(decision.eventID, to: stmt, at: 1)
+                    bindText(decision.sourceID, to: stmt, at: 2)
+                    bindText(decision.reason, to: stmt, at: 3)
+                    sqlite3_bind_double(stmt, 4, decision.decidedAt.timeIntervalSince1970)
+                }
+            }
+        }
+        try pruneEventRejections(reference: decisions.map(\.decidedAt).max() ?? Date())
+    }
+
+    public func eventRejectionCounts(from: Date, to: Date) async throws -> [String: Int] {
+        try ensureOpen()
+        var counts: [String: Int] = [:]
+        try query("SELECT reason, COUNT(*) FROM event_rejections WHERE decided_at >= ? AND decided_at < ? GROUP BY reason ORDER BY reason", bind: { stmt in
+            sqlite3_bind_double(stmt, 1, from.timeIntervalSince1970)
+            sqlite3_bind_double(stmt, 2, to.timeIntervalSince1970)
+        }) { stmt in
+            if let reason = Self.columnText(stmt, 0) { counts[reason] = Int(sqlite3_column_int64(stmt, 1)) }
+        }
+        return counts
+    }
+
+    public func eventKeywordFrequencyReport(now: Date = Date(), window: TimeInterval = 24 * 60 * 60,
+                                            top: Int = 100) async throws -> EventKeywordFrequencyReport {
+        try ensureOpen()
+        let safeWindow = max(1, window)
+        let events = try await fetchEvents(from: now.addingTimeInterval(-2 * safeWindow), to: now)
+        return EventKeywordFrequencyReport.compare(events: events, now: now, window: safeWindow, top: top)
     }
 
     public func searchEvents(matching queryText: String, limit: Int) async throws -> [MarketEvent] {
@@ -585,6 +804,39 @@ public actor SQLiteMonitorStore: MonitorStore {
         return result
     }
 
+    /// Stores only source-reported current fundamentals; these are not backfilled
+    /// into older daily bars, avoiding look-ahead in historical factor tests.
+    public func upsertFundamentalSnapshots(_ snapshots: [EastmoneyFundamentalSnapshot]) async throws {
+        try ensureOpen()
+        try transaction {
+            for snapshot in snapshots {
+                guard let code = snapshot.code,
+                      code.range(of: "^[0-9]{6}$", options: .regularExpression) != nil,
+                      snapshot.fetchedAt.timeIntervalSince1970.isFinite else { continue }
+                let payload = try encodedString(snapshot)
+                try run("INSERT OR REPLACE INTO fundamental_snapshots(code, fetched_at, payload) VALUES(?, ?, ?)") { stmt in
+                    bindText(code, to: stmt, at: 1)
+                    sqlite3_bind_double(stmt, 2, snapshot.fetchedAt.timeIntervalSince1970)
+                    bindText(payload, to: stmt, at: 3)
+                }
+            }
+        }
+    }
+
+    public func latestFundamentalSnapshots(codes: [String]) async throws -> [EastmoneyFundamentalSnapshot] {
+        try ensureOpen()
+        let normalized = Array(Set(codes.filter { $0.range(of: "^[0-9]{6}$", options: .regularExpression) != nil })).sorted()
+        var result: [EastmoneyFundamentalSnapshot] = []
+        for code in normalized {
+            try query("SELECT payload FROM fundamental_snapshots WHERE code=? ORDER BY fetched_at DESC LIMIT 1") { bindText(code, to: $0, at: 1) } row: { stmt in
+                guard let payload = Self.columnText(stmt, 0),
+                      let value = try? decoder.decode(EastmoneyFundamentalSnapshot.self, from: Data(payload.utf8)) else { return }
+                result.append(value)
+            }
+        }
+        return result
+    }
+
     public func beginSession(at date: Date) async throws {
         try ensureOpen()
         try run("INSERT INTO sessions(started_at) VALUES(?)") { sqlite3_bind_double($0, 1, date.timeIntervalSince1970) }
@@ -597,9 +849,146 @@ public actor SQLiteMonitorStore: MonitorStore {
         }
     }
 
+    public func recordSessionActivity(ticks: Int, requests: Int, promptTokens: Int? = nil,
+                                      completionTokens: Int? = nil, totalTokens: Int? = nil) async throws {
+        try ensureOpen()
+        guard ticks >= 0, requests >= 0,
+              [promptTokens, completionTokens, totalTokens].compactMap({ $0 }).allSatisfy({ $0 >= 0 }) else { return }
+        try run("""
+            UPDATE sessions SET
+              tick_count=tick_count+?, request_count=request_count+?,
+              prompt_tokens=CASE WHEN ? IS NULL THEN prompt_tokens ELSE COALESCE(prompt_tokens, 0)+? END,
+              completion_tokens=CASE WHEN ? IS NULL THEN completion_tokens ELSE COALESCE(completion_tokens, 0)+? END,
+              total_tokens=CASE WHEN ? IS NULL THEN total_tokens ELSE COALESCE(total_tokens, 0)+? END
+            WHERE id=(SELECT MAX(id) FROM sessions WHERE ended_at IS NULL)
+            """) { stmt in
+                sqlite3_bind_int64(stmt, 1, sqlite3_int64(ticks)); sqlite3_bind_int64(stmt, 2, sqlite3_int64(requests))
+                if let promptTokens { sqlite3_bind_int64(stmt, 3, sqlite3_int64(promptTokens)); sqlite3_bind_int64(stmt, 4, sqlite3_int64(promptTokens)) }
+                else { sqlite3_bind_null(stmt, 3); sqlite3_bind_null(stmt, 4) }
+                if let completionTokens { sqlite3_bind_int64(stmt, 5, sqlite3_int64(completionTokens)); sqlite3_bind_int64(stmt, 6, sqlite3_int64(completionTokens)) }
+                else { sqlite3_bind_null(stmt, 5); sqlite3_bind_null(stmt, 6) }
+                if let totalTokens { sqlite3_bind_int64(stmt, 7, sqlite3_int64(totalTokens)); sqlite3_bind_int64(stmt, 8, sqlite3_int64(totalTokens)) }
+                else { sqlite3_bind_null(stmt, 7); sqlite3_bind_null(stmt, 8) }
+            }
+    }
+
+    public func latestSessionUsage() async throws -> MonitorSessionUsage? {
+        try ensureOpen()
+        var result: MonitorSessionUsage?
+        try query("SELECT tick_count, request_count, prompt_tokens, completion_tokens, total_tokens FROM sessions ORDER BY id DESC LIMIT 1", bind: { _ in }) { stmt in
+            result = MonitorSessionUsage(tickCount: Int(sqlite3_column_int64(stmt, 0)),
+                requestCount: Int(sqlite3_column_int64(stmt, 1)),
+                promptTokenCount: sqlite3_column_type(stmt, 2) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, 2)),
+                completionTokenCount: sqlite3_column_type(stmt, 3) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, 3)),
+                totalTokenCount: sqlite3_column_type(stmt, 4) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, 4)))
+        }
+        return result
+    }
+
+    public func recordLiveTickStatus(_ record: LiveTickStatusRecord) async throws {
+        try ensureOpen()
+        let missing = try encodedString(record.missingSymbols)
+        try run("INSERT OR REPLACE INTO live_tick_status(id, recorded_at, operation, data_status, requested_symbols, returned_symbols, missing_symbols, reconcile_outcome) VALUES(?, ?, ?, ?, ?, ?, ?, ?)") { stmt in
+            bindText(record.id.uuidString, to: stmt, at: 1)
+            sqlite3_bind_double(stmt, 2, record.recordedAt.timeIntervalSince1970)
+            bindText(record.operation.rawValue, to: stmt, at: 3)
+            bindText(record.dataStatus.rawValue, to: stmt, at: 4)
+            sqlite3_bind_int64(stmt, 5, sqlite3_int64(record.requestedSymbols))
+            sqlite3_bind_int64(stmt, 6, sqlite3_int64(record.returnedSymbols))
+            bindText(missing, to: stmt, at: 7)
+            bindText(record.reconcileOutcome.rawValue, to: stmt, at: 8)
+        }
+        try pruneLiveTickStatuses()
+    }
+
+    public func fetchLiveTickStatuses(limit: Int = 100) async throws -> [LiveTickStatusRecord] {
+        try ensureOpen()
+        let bounded = min(max(0, limit), maximumLiveTickStatusRows)
+        guard bounded > 0 else { return [] }
+        var result: [LiveTickStatusRecord] = []
+        try query("SELECT id, recorded_at, operation, data_status, requested_symbols, returned_symbols, missing_symbols, reconcile_outcome FROM live_tick_status ORDER BY recorded_at DESC, id DESC LIMIT \(bounded)", bind: { _ in }) { stmt in
+            guard let idText = Self.columnText(stmt, 0), let id = UUID(uuidString: idText),
+                  let operationText = Self.columnText(stmt, 2), let operation = LiveTickStatusOperation(rawValue: operationText),
+                  let dataText = Self.columnText(stmt, 3), let dataStatus = LiveTickDataStatus(rawValue: dataText),
+                  let outcomeText = Self.columnText(stmt, 7), let outcome = LiveReconcileOutcome(rawValue: outcomeText),
+                  let missingText = Self.columnText(stmt, 6),
+                  let missing = try? decoder.decode([String].self, from: Data(missingText.utf8)) else { return }
+            result.append(LiveTickStatusRecord(id: id, recordedAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 1)),
+                operation: operation, dataStatus: dataStatus, requestedSymbols: Int(sqlite3_column_int64(stmt, 4)),
+                returnedSymbols: Int(sqlite3_column_int64(stmt, 5)), missingSymbols: missing, reconcileOutcome: outcome))
+        }
+        return result
+    }
+
     public func checkpoint() async throws {
         try ensureOpen()
         try execute("PRAGMA wal_checkpoint(FULL);")
+    }
+
+    public func cachedAnalystResult(for key: AnalystResultCacheKey, now: Date = Date()) async throws -> StrategyResult? {
+        try ensureOpen()
+        var result: StrategyResult?
+        var expired = false
+        try query("SELECT payload, expires_at FROM analyst_result_cache WHERE cache_id=?") { stmt in
+            bindText(key.cacheID, to: stmt, at: 1)
+        } row: { stmt in
+            let expiresAt = sqlite3_column_double(stmt, 1)
+            if expiresAt <= now.timeIntervalSince1970 { expired = true; return }
+            if let payload = Self.columnText(stmt, 0) {
+                result = try? decoder.decode(StrategyResult.self, from: Data(payload.utf8))
+            }
+        }
+        if expired { try run("DELETE FROM analyst_result_cache WHERE cache_id=?") { bindText(key.cacheID, to: $0, at: 1) } }
+        return result
+    }
+
+    public func storeAnalystResult(_ result: StrategyResult, for key: AnalystResultCacheKey,
+                                   storedAt: Date = Date(), expiresAt: Date? = nil) async throws {
+        try ensureOpen()
+        let expiration = expiresAt ?? Self.nextChinaDayBoundary(after: storedAt)
+        guard expiration > storedAt else { return }
+        let payload = try encodedString(result)
+        try run("INSERT OR REPLACE INTO analyst_result_cache(cache_id, stock_code, trading_day, endpoint_host, model_id, context_fingerprint, stored_at, expires_at, payload) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)") { stmt in
+            bindText(key.cacheID, to: stmt, at: 1); bindText(key.stockCode, to: stmt, at: 2)
+            bindText(key.tradingDay, to: stmt, at: 3); bindText(key.endpointHost, to: stmt, at: 4)
+            bindText(key.modelID, to: stmt, at: 5); bindText(key.contextFingerprint, to: stmt, at: 6)
+            sqlite3_bind_double(stmt, 7, storedAt.timeIntervalSince1970)
+            sqlite3_bind_double(stmt, 8, expiration.timeIntervalSince1970); bindText(payload, to: stmt, at: 9)
+        }
+    }
+
+    public func recordAnalystUsage(for key: AnalystResultCacheKey, requestCount: Int = 1,
+                                   promptTokenCount: Int? = nil, completionTokenCount: Int? = nil,
+                                   totalTokenCount: Int? = nil) async throws {
+        try ensureOpen()
+        guard requestCount >= 0 else { return }
+        try run("INSERT INTO analyst_usage_ledger(cache_id, stock_code, trading_day, endpoint_host, model_id, request_count, prompt_tokens, completion_tokens, total_tokens) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(cache_id) DO UPDATE SET request_count=request_count+excluded.request_count, prompt_tokens=CASE WHEN excluded.prompt_tokens IS NULL THEN prompt_tokens ELSE COALESCE(prompt_tokens, 0)+excluded.prompt_tokens END, completion_tokens=CASE WHEN excluded.completion_tokens IS NULL THEN completion_tokens ELSE COALESCE(completion_tokens, 0)+excluded.completion_tokens END, total_tokens=CASE WHEN excluded.total_tokens IS NULL THEN total_tokens ELSE COALESCE(total_tokens, 0)+excluded.total_tokens END") { stmt in
+            bindText(key.cacheID, to: stmt, at: 1); bindText(key.stockCode, to: stmt, at: 2)
+            bindText(key.tradingDay, to: stmt, at: 3); bindText(key.endpointHost, to: stmt, at: 4)
+            bindText(key.modelID, to: stmt, at: 5); sqlite3_bind_int(stmt, 6, Int32(requestCount))
+            if let promptTokenCount { sqlite3_bind_int(stmt, 7, Int32(promptTokenCount)) } else { sqlite3_bind_null(stmt, 7) }
+            if let completionTokenCount { sqlite3_bind_int(stmt, 8, Int32(completionTokenCount)) } else { sqlite3_bind_null(stmt, 8) }
+            if let totalTokenCount { sqlite3_bind_int(stmt, 9, Int32(totalTokenCount)) } else { sqlite3_bind_null(stmt, 9) }
+        }
+    }
+
+    public func analystUsage(for key: AnalystResultCacheKey) async throws -> AnalystUsageLedger? {
+        try ensureOpen()
+        var usage: AnalystUsageLedger?
+        try query("SELECT request_count, prompt_tokens, completion_tokens, total_tokens FROM analyst_usage_ledger WHERE cache_id=?") { bindText(key.cacheID, to: $0, at: 1) } row: { stmt in
+            usage = AnalystUsageLedger(requestCount: Int(sqlite3_column_int(stmt, 0)),
+                                       promptTokenCount: sqlite3_column_type(stmt, 1) == SQLITE_NULL ? nil : Int(sqlite3_column_int(stmt, 1)),
+                                       completionTokenCount: sqlite3_column_type(stmt, 2) == SQLITE_NULL ? nil : Int(sqlite3_column_int(stmt, 2)),
+                                       totalTokenCount: sqlite3_column_type(stmt, 3) == SQLITE_NULL ? nil : Int(sqlite3_column_int(stmt, 3)))
+        }
+        return usage
+    }
+
+    private static func nextChinaDayBoundary(after date: Date) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let start = calendar.startOfDay(for: date)
+        return calendar.date(byAdding: .day, value: 1, to: start) ?? date
     }
 
     private func configureAndCreateSchema() throws {
@@ -628,6 +1017,9 @@ public actor SQLiteMonitorStore: MonitorStore {
         CREATE TABLE IF NOT EXISTS watch_rules(id TEXT PRIMARY KEY NOT NULL, payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS rule_settings(family TEXT PRIMARY KEY NOT NULL, payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS rule_state(id TEXT PRIMARY KEY NOT NULL, payload TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS portable_cursors(
+          kind TEXT NOT NULL, code TEXT NOT NULL, captured_at REAL NOT NULL,
+          PRIMARY KEY(kind, code));
         CREATE TABLE IF NOT EXISTS positions(code TEXT PRIMARY KEY NOT NULL, payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS signals(
           id TEXT PRIMARY KEY NOT NULL, created_at REAL NOT NULL, read_at REAL,
@@ -638,6 +1030,10 @@ public actor SQLiteMonitorStore: MonitorStore {
           source_id TEXT NOT NULL, priority INTEGER NOT NULL, payload TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS events_time_idx ON events(event_time DESC);
         CREATE INDEX IF NOT EXISTS events_source_time_idx ON events(source_id, event_time DESC);
+        CREATE TABLE IF NOT EXISTS event_rejections(
+          event_id TEXT NOT NULL, source_id TEXT NOT NULL, reason TEXT NOT NULL,
+          decided_at REAL NOT NULL);
+        CREATE INDEX IF NOT EXISTS event_rejections_time_reason_idx ON event_rejections(decided_at, reason);
         CREATE VIRTUAL TABLE IF NOT EXISTS event_fts USING fts5(
           event_id UNINDEXED, title, body, source_id, stock_codes, sectors, tokenize='trigram');
         CREATE TRIGGER IF NOT EXISTS events_delete_fts AFTER DELETE ON events BEGIN
@@ -654,7 +1050,28 @@ public actor SQLiteMonitorStore: MonitorStore {
           filter_total INTEGER NOT NULL DEFAULT 0, llm_enriched INTEGER NOT NULL DEFAULT 0,
           rule_or_skipped INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS sessions(
-          id INTEGER PRIMARY KEY AUTOINCREMENT, started_at REAL NOT NULL, ended_at REAL);
+          id INTEGER PRIMARY KEY AUTOINCREMENT, started_at REAL NOT NULL, ended_at REAL,
+          tick_count INTEGER NOT NULL DEFAULT 0, request_count INTEGER NOT NULL DEFAULT 0,
+          prompt_tokens INTEGER, completion_tokens INTEGER, total_tokens INTEGER);
+        CREATE TABLE IF NOT EXISTS live_tick_status(
+          id TEXT PRIMARY KEY NOT NULL, recorded_at REAL NOT NULL, operation TEXT NOT NULL,
+          data_status TEXT NOT NULL, requested_symbols INTEGER NOT NULL,
+          returned_symbols INTEGER NOT NULL, missing_symbols TEXT NOT NULL,
+          reconcile_outcome TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS live_tick_status_time_idx ON live_tick_status(recorded_at DESC);
+        CREATE TABLE IF NOT EXISTS analyst_result_cache(
+          cache_id TEXT PRIMARY KEY NOT NULL, stock_code TEXT NOT NULL, trading_day TEXT NOT NULL,
+          endpoint_host TEXT NOT NULL, model_id TEXT NOT NULL, context_fingerprint TEXT NOT NULL,
+          stored_at REAL NOT NULL, expires_at REAL NOT NULL, payload TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS analyst_cache_expiry_idx ON analyst_result_cache(expires_at);
+        CREATE TABLE IF NOT EXISTS analyst_usage_ledger(
+          cache_id TEXT PRIMARY KEY NOT NULL, stock_code TEXT NOT NULL, trading_day TEXT NOT NULL,
+          endpoint_host TEXT NOT NULL, model_id TEXT NOT NULL, request_count INTEGER NOT NULL,
+          prompt_tokens INTEGER, completion_tokens INTEGER, total_tokens INTEGER);
+        CREATE TABLE IF NOT EXISTS fundamental_snapshots(
+          code TEXT NOT NULL, fetched_at REAL NOT NULL, payload TEXT NOT NULL,
+          PRIMARY KEY(code, fetched_at));
+        CREATE INDEX IF NOT EXISTS fundamentals_latest_idx ON fundamental_snapshots(code, fetched_at DESC);
         """)
     }
 
@@ -663,17 +1080,53 @@ public actor SQLiteMonitorStore: MonitorStore {
         try query("PRAGMA user_version", bind: { _ in }) { stmt in
             version = Int(sqlite3_column_int(stmt, 0))
         }
-        guard version < 1 else { return }
-        var existing: [MarketEvent] = []
-        try query("SELECT payload FROM events ORDER BY event_time ASC", bind: { _ in }) { stmt in
-            guard let payload = Self.columnText(stmt, 0),
-                  let event = try? decoder.decode(MarketEvent.self, from: Data(payload.utf8)) else { return }
-            existing.append(event)
+        if version < 1 {
+            var existing: [MarketEvent] = []
+            try query("SELECT payload FROM events ORDER BY event_time ASC", bind: { _ in }) { stmt in
+                guard let payload = Self.columnText(stmt, 0),
+                      let event = try? decoder.decode(MarketEvent.self, from: Data(payload.utf8)) else { return }
+                existing.append(event)
+            }
+            try transaction {
+                try execute("DELETE FROM event_fts;")
+                for event in existing { try insertEventSearchIndex(event) }
+                try execute("PRAGMA user_version=1;")
+            }
+            version = 1
         }
-        try transaction {
-            try execute("DELETE FROM event_fts;")
-            for event in existing { try insertEventSearchIndex(event) }
-            try execute("PRAGMA user_version=1;")
+        if version < 2 { try execute("PRAGMA user_version=2;"); version = 2 }
+        if version < 3 {
+            var columns: Set<String> = []
+            try query("PRAGMA table_info(sessions)", bind: { _ in }) { stmt in
+                if let name = Self.columnText(stmt, 1) { columns.insert(name) }
+            }
+            let migrations: [(String, String)] = [
+                ("tick_count", "ALTER TABLE sessions ADD COLUMN tick_count INTEGER NOT NULL DEFAULT 0;"),
+                ("request_count", "ALTER TABLE sessions ADD COLUMN request_count INTEGER NOT NULL DEFAULT 0;"),
+                ("prompt_tokens", "ALTER TABLE sessions ADD COLUMN prompt_tokens INTEGER;"),
+                ("completion_tokens", "ALTER TABLE sessions ADD COLUMN completion_tokens INTEGER;"),
+                ("total_tokens", "ALTER TABLE sessions ADD COLUMN total_tokens INTEGER;")
+            ]
+            for (name, sql) in migrations where !columns.contains(name) { try execute(sql) }
+            try execute("PRAGMA user_version=3;")
+            version = 3
+        }
+        if version < 4 {
+            try execute("CREATE TABLE IF NOT EXISTS fundamental_snapshots(code TEXT NOT NULL, fetched_at REAL NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(code, fetched_at));")
+            try execute("CREATE INDEX IF NOT EXISTS fundamentals_latest_idx ON fundamental_snapshots(code, fetched_at DESC);")
+            try execute("PRAGMA user_version=4;")
+            version = 4
+        }
+        if version < 5 {
+            try execute("CREATE TABLE IF NOT EXISTS live_tick_status(id TEXT PRIMARY KEY NOT NULL, recorded_at REAL NOT NULL, operation TEXT NOT NULL, data_status TEXT NOT NULL, requested_symbols INTEGER NOT NULL, returned_symbols INTEGER NOT NULL, missing_symbols TEXT NOT NULL, reconcile_outcome TEXT NOT NULL);")
+            try execute("CREATE INDEX IF NOT EXISTS live_tick_status_time_idx ON live_tick_status(recorded_at DESC);")
+            try execute("PRAGMA user_version=5;")
+            version = 5
+        }
+        if version < 6 {
+            try execute("CREATE TABLE IF NOT EXISTS event_rejections(event_id TEXT NOT NULL, source_id TEXT NOT NULL, reason TEXT NOT NULL, decided_at REAL NOT NULL);")
+            try execute("CREATE INDEX IF NOT EXISTS event_rejections_time_reason_idx ON event_rejections(decided_at, reason);")
+            try execute("PRAGMA user_version=6;")
         }
     }
 
@@ -720,10 +1173,99 @@ public actor SQLiteMonitorStore: MonitorStore {
         }
     }
 
+    private func pruneLiveTickStatuses(reference: Date = Date()) throws {
+        let cutoff = reference.timeIntervalSince1970 - 7 * 24 * 60 * 60
+        try run("DELETE FROM live_tick_status WHERE recorded_at < ? OR id NOT IN (SELECT id FROM live_tick_status WHERE recorded_at >= ? ORDER BY recorded_at DESC, id DESC LIMIT \(maximumLiveTickStatusRows))") { stmt in
+            sqlite3_bind_double(stmt, 1, cutoff)
+            sqlite3_bind_double(stmt, 2, cutoff)
+        }
+    }
+
+    private func pruneEventRejections(reference: Date) throws {
+        let cutoff = reference.timeIntervalSince1970 - 7 * 24 * 60 * 60
+        try execute("DELETE FROM event_rejections WHERE decided_at < \(cutoff) OR rowid NOT IN (SELECT rowid FROM event_rejections ORDER BY decided_at DESC, rowid DESC LIMIT 10000);")
+    }
+
     private static func escapeLike(_ value: String) -> String {
         value.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "%", with: "\\%")
             .replacingOccurrences(of: "_", with: "\\_")
+    }
+
+    private static let portableSignalLimit = 100_000
+    private static let portableIndexQuoteLimit = 10_000
+    private static let portableEventLimit = 100_000
+
+    private func portableHistory() throws -> PortableBackupHistory {
+        var minutePayloads: [String] = []
+        var dailyPayloads: [String] = []
+        try query("SELECT payload FROM minute_bars ORDER BY captured_at ASC, code ASC LIMIT \(maximumPortableHistoryMinuteRows + 1)", bind: { _ in }) { stmt in
+            if let payload = Self.columnText(stmt, 0) { minutePayloads.append(payload) }
+        }
+        try query("SELECT payload FROM daily_bars ORDER BY trade_date ASC, code ASC LIMIT \(maximumPortableHistoryDailyRows + 1)", bind: { _ in }) { stmt in
+            if let payload = Self.columnText(stmt, 0) { dailyPayloads.append(payload) }
+        }
+        if minutePayloads.count > maximumPortableHistoryMinuteRows {
+            return PortableBackupHistory(omissionReason: "minute_bars row cap exceeded (\(maximumPortableHistoryMinuteRows))")
+        }
+        if dailyPayloads.count > maximumPortableHistoryDailyRows {
+            return PortableBackupHistory(omissionReason: "daily_bars row cap exceeded (\(maximumPortableHistoryDailyRows))")
+        }
+        let bytes = minutePayloads.reduce(0) { $0 + $1.utf8.count } + dailyPayloads.reduce(0) { $0 + $1.utf8.count }
+        if bytes > maximumPortableHistoryBytes {
+            return PortableBackupHistory(omissionReason: "history byte cap exceeded (\(maximumPortableHistoryBytes))")
+        }
+        var minuteBars: [MinuteBar] = []
+        for payload in minutePayloads {
+            guard let bar = try? decoder.decode(MinuteBar.self, from: Data(payload.utf8)) else {
+                return PortableBackupHistory(omissionReason: "minute_bars contains an undecodable row")
+            }
+            minuteBars.append(bar)
+        }
+        var dailyBars: [DailyBar] = []
+        for payload in dailyPayloads {
+            guard let bar = try? decoder.decode(DailyBar.self, from: Data(payload.utf8)) else {
+                return PortableBackupHistory(omissionReason: "daily_bars contains an undecodable row")
+            }
+            dailyBars.append(bar)
+        }
+        return PortableBackupHistory(minuteBars: minuteBars, dailyBars: dailyBars)
+    }
+
+    private func decodePortableQuotes(table: String, limit: Int) throws -> [Quote] {
+        guard table == "quotes" || table == "index_quotes" else { return [] }
+        var result: [Quote] = []
+        try query("SELECT payload FROM \(table) ORDER BY captured_at ASC, code ASC LIMIT \(max(1, limit))", bind: { _ in }) { stmt in
+            if let payload = Self.columnText(stmt, 0), let value = try? decoder.decode(Quote.self, from: Data(payload.utf8)) { result.append(value) }
+        }
+        return result
+    }
+
+    private func portableCursors() throws -> (last: Date?, quotes: [String: Date], minutes: [String: Date]) {
+        var last: Date?
+        var quotes: [String: Date] = [:]
+        var minutes: [String: Date] = [:]
+        try query("SELECT kind, code, captured_at FROM portable_cursors", bind: { _ in }) { stmt in
+            guard let kind = Self.columnText(stmt, 0) else { return }
+            let date = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 2))
+            switch kind {
+            case "last": last = date
+            case "quote": if let code = Self.columnText(stmt, 1) { quotes[code] = date }
+            case "minute": if let code = Self.columnText(stmt, 1) { minutes[code] = date }
+            default: break
+            }
+        }
+        if last != nil || !quotes.isEmpty || !minutes.isEmpty { return (last, quotes, minutes) }
+        try query("SELECT MAX(captured_at) FROM quotes", bind: { _ in }) { stmt in
+            if sqlite3_column_type(stmt, 0) != SQLITE_NULL { last = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 0)) }
+        }
+        try query("SELECT code, MAX(captured_at) FROM quotes GROUP BY code", bind: { _ in }) { stmt in
+            if let code = Self.columnText(stmt, 0) { quotes[code] = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 1)) }
+        }
+        try query("SELECT code, MAX(captured_at) FROM minute_bars GROUP BY code", bind: { _ in }) { stmt in
+            if let code = Self.columnText(stmt, 0) { minutes[code] = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 1)) }
+        }
+        return (last, quotes, minutes)
     }
 
     private func decodeLatestQuotes(table: String) throws -> [Quote] {
@@ -813,6 +1355,7 @@ public actor SQLiteMonitorStore: MonitorStore {
         try pruneDailyBars(reference: reference)
         try execute("DELETE FROM signals WHERE created_at < \(cutoff);")
         try execute("DELETE FROM events WHERE event_time < \(cutoff) OR rowid NOT IN (SELECT rowid FROM events ORDER BY event_time DESC LIMIT 100000);")
+        try pruneEventRejections(reference: reference)
         try execute("DELETE FROM source_health_daily WHERE day < \(cutoff);")
         try execute("DELETE FROM sessions WHERE started_at < \(cutoff);")
     }

@@ -7,7 +7,7 @@ struct MonitorApp: App {
 
     var body: some Scene {
         WindowGroup {
-            MonitorView(model: model)
+            StockMonitorTabShell(model: model)
                 .task { model.start() }
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {

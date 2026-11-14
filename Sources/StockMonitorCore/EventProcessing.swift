@@ -40,14 +40,24 @@ public struct CollectorEventPolicy: Sendable, Equatable {
     }
 
     public func keep(_ event: MarketEvent) -> Bool {
-        guard filterEnabled else { return true }
+        rejectionReason(for: event) == nil
+    }
+
+    /// Returns only reasons that are observable from the configured local rules.
+    /// The first matching rule is deterministic and mirrors the filter order.
+    public func rejectionReason(for event: MarketEvent) -> String? {
+        guard filterEnabled else { return nil }
         let highValue = event.priority >= alwaysKeepMinPriority || !event.sectors.isEmpty ||
             event.duplicateCount >= alwaysKeepNewsCount
-        if highValue { return true }
-        if lowPriorityNoSectorEnabled, event.priority <= lowPriorityMax, event.sectors.isEmpty { return false }
+        if highValue { return nil }
+        if lowPriorityNoSectorEnabled, event.priority <= lowPriorityMax, event.sectors.isEmpty {
+            return "low_priority_no_sector"
+        }
         if lowValueIndividualEnabled, event.priority <= lowValueMaxPriority,
-           event.impactScope == .stock, event.duplicateCount < lowValueMinNewsCount { return false }
-        return true
+           event.impactScope == .stock, event.duplicateCount < lowValueMinNewsCount {
+            return "low_value_individual"
+        }
+        return nil
     }
 
     /// Parses only the stable scalar/list subset used by Resources/collector.yaml.
@@ -151,13 +161,16 @@ public struct EventProcessingResult: Sendable {
     public let events: [MarketEvent]
     public let filterTotal: Int
     public let filterKept: Int
+    public let rejections: [EventRejectionDecision]
 
     public var filterFiltered: Int { max(0, filterTotal - filterKept) }
 
-    public init(events: [MarketEvent], filterTotal: Int, filterKept: Int) {
+    public init(events: [MarketEvent], filterTotal: Int, filterKept: Int,
+                rejections: [EventRejectionDecision] = []) {
         self.events = events
         self.filterTotal = max(0, filterTotal)
         self.filterKept = min(self.filterTotal, max(0, filterKept))
+        self.rejections = rejections
     }
 }
 
@@ -207,7 +220,14 @@ public struct EventProcessor: Sendable {
             else { clusters.append([event]) }
         }
         let merged = clusters.compactMap(merge)
-        let kept = merged.filter(policy.keep)
+        let rejectionTime = Date()
+        let rejections = merged.compactMap { event in
+            policy.rejectionReason(for: event).map {
+                EventRejectionDecision(eventID: event.id, sourceID: event.sourceID,
+                    reason: $0, decidedAt: rejectionTime)
+            }
+        }
+        let kept = merged.filter { policy.rejectionReason(for: $0) == nil }
         let sorted = kept
             .sorted {
                 if $0.priority != $1.priority { return $0.priority > $1.priority }
@@ -215,7 +235,8 @@ public struct EventProcessor: Sendable {
                 let rightDate = $1.publishedAt ?? $1.fetchedAt
                 return leftDate > rightDate
             }
-        return EventProcessingResult(events: sorted, filterTotal: merged.count, filterKept: kept.count)
+        return EventProcessingResult(events: sorted, filterTotal: merged.count, filterKept: kept.count,
+            rejections: rejections)
     }
 
     public func summary(events: [MarketEvent], day: Date, calendar: Calendar? = nil,

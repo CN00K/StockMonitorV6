@@ -1,0 +1,9 @@
+{
+  "source_url": "https://www.cninfo.com.cn/new/data/szse_stock.json",
+  "http_status": 200,
+  "retrieval_timestamp": "2026-11-14T04:39:06Z",
+  "byte_count": 593064,
+  "sha256": "3089ff999a668ae0d6e81dc2af95f09537d83c9f98352e87a14b2683438ad6eb",
+  "content_type": "application/json",
+  "capture_note": "Unmodified public response body; no cookies or authentication."
+}

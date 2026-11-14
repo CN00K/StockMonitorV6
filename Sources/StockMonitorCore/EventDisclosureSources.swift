@@ -106,6 +106,7 @@ public struct CNInfoAnnouncementSource: StockAwareMarketEventSource {
         let rows: [[String: Any]]
         if let array = value as? [[String: Any]] { rows = array }
         else if let object = value as? [String: Any], let array = object["data"] as? [[String: Any]] { rows = array }
+        else if let object = value as? [String: Any], let array = object["stockList"] as? [[String: Any]] { rows = array }
         else { throw EventNetworkError.provider("CNINFO stock map shape was not recognized") }
         var result: [String: String] = [:]
         for row in rows {

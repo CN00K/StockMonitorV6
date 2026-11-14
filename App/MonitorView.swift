@@ -1,6 +1,11 @@
 import SwiftUI
 import StockMonitorCore
 
+private struct LocalEventSankeyAssociation: Hashable {
+    let sourceID: String
+    let sectorTag: String
+}
+
 @MainActor
 final class MonitorViewModel: ObservableObject {
     @Published var state = EngineViewState(phase: .closed, watchCodes: [], latestSnapshot: nil,
@@ -14,6 +19,9 @@ final class MonitorViewModel: ObservableObject {
     @Published var eventSummary: DailyEventSummary?
     @Published var eventMessage: String?
     @Published var isLoadingEvents = false
+    @Published var recentEvents: [MarketEvent] = []
+    @Published var isLoadingRecentEvents = false
+    @Published var recentEventsMessage: String?
     @Published var eventSearchText = ""
     @Published var eventSearchResults: [MarketEvent] = []
     @Published var isSearchingEvents = false
@@ -21,7 +29,29 @@ final class MonitorViewModel: ObservableObject {
     @Published var sourceHealthSnapshot: SourceHealthSnapshot?
     @Published var rawArchiveStats = RawResponseArchiveStats(responseCount: 0, byteCount: 0,
         oldestResponseAt: nil, newestResponseAt: nil)
+    @Published var latestSessionUsage: MonitorSessionUsage?
+    @Published var isLoadingHealthDashboard = false
+    @Published var healthDashboardError: String?
+    @Published var healthDashboardUpdatedAt: Date?
+    @Published var fullMarketCoverage: MarketCoverageSnapshot? {
+        didSet { updateLocalSentimentFromAvailableCoverage() }
+    }
+    @Published var isLoadingFullMarketCoverage = false
+    @Published var fullMarketCoverageMessage: String?
     @Published var exportURL: URL?
+    @Published var dailyReportURL: URL?
+    @Published var dailyReportMessage: String?
+    @Published var dailyReport: ReportModel?
+    @Published var isBuildingDailyReport = false
+    @Published var fundamentalsSnapshots: [EastmoneyFundamentalSnapshot] = []
+    @Published var fundamentalsMessage: String?
+    @Published var isRefreshingFundamentals = false
+    @Published var notificationMessage: String?
+    @Published var notificationPermissionGranted: Bool?
+    @Published var isRequestingNotificationPermission = false
+    @Published var isDeliveringAlerts = false
+    @Published var diagnosticExportURL: URL?
+    @Published var diagnosticExportMessage: String?
     @Published var analystEndpointText = UserDefaults.standard.string(forKey: "stockmonitor.analyst.endpoint") ?? ""
     @Published var analystModelText = UserDefaults.standard.string(forKey: "stockmonitor.analyst.model") ?? ""
     @Published var analystKeyInput = ""
@@ -45,46 +75,61 @@ final class MonitorViewModel: ObservableObject {
     @Published var backtestSourceStatus: SourceStatus?
     @Published var backtestMessage: String?
     @Published var isRunningBacktest = false
+    @Published var backtestBootstrap: LocalBacktestBootstrapResult?
+    @Published var localCorrelationMatrix: LocalCorrelationMatrix?
+    @Published var localCorrelationMessage: String?
+    @Published var isCalculatingLocalCorrelation = false
+    @Published var localResearchIsLoading = false
+    @Published var localEventRejectionCounts: [(reason: String, count: Int)] = []
+    @Published var localEventKeywordReport: EventKeywordFrequencyReport?
+    @Published var localEventAnalyticsError: String?
+    @Published var localTickStatuses: [LiveTickStatusRecord] = []
+    @Published var localTickStatusError: String?
+    @Published var localSentimentResult: LocalMarketSentimentResult?
+    @Published var localSentimentObservations: [LocalMarketSentimentComponent: LocalMarketSentimentObservation] = [:]
+    @Published var localSentimentExplanation = "尚未读取当前会话的本地市场样本。"
+    @Published var localFactorCorrelationMatrix: LocalFactorCorrelationMatrix?
+    @Published var localFactorExposureResults: [LocalFactorExposureResult] = []
+    @Published var localFactorExplanation = "尚未读取本地基本面缓存。"
+    @Published var localEventSankeyLayout: SankeyLayout?
+    @Published var localFactorForceGraphLayout: ForceGraphLayout?
+    @Published var localGraphExplanation = "关系图只使用本地存储的事件标签和已计算因子结果；缺少输入时显示未知。"
 
+    private let runtime: StockMonitorFunctionalRuntime
     private let engine: LiveEngine
-    private let eventCollector: EventCollector
     private let monitorStore: any MonitorStore
-    private let dailyHistorySource: any DailyHistoryProviding
-    private let analyst = OnDemandAnalyst()
     private var refreshTask: Task<Void, Never>?
     private var eventRefreshTask: Task<Void, Never>?
+    private var recentEventsTask: Task<Void, Never>?
     private var stoppingTask: Task<Void, Never>?
     private var settingsSaveTask: Task<Void, Never>?
     private var analystTask: Task<Void, Never>?
     private var backtestTask: Task<Void, Never>?
+    private var fullMarketScanTask: Task<Void, Never>?
+    private var dailyReportTask: Task<Void, Never>?
+    private var fundamentalsTask: Task<Void, Never>?
+    private var dailyReportOperationID: UUID?
+    private var fundamentalsOperationID: UUID?
     private var pendingRuleFamilySettings: [RuleFamilySettings]?
     private var lifecycleGeneration = 0
 
     init() {
-        let budget = RequestBudget.standard()
-        let registry = QuoteSourceRegistry(sources: [
-            SinaQuoteSource(budget: budget),
-            EastmoneyQuoteSource(budget: budget),
-            TencentQuoteSource(budget: budget)
-        ])
-        let store = SQLiteMonitorStore()
-        monitorStore = store
-        engine = LiveEngine(store: store, source: registry,
-            historicalSource: EastmoneyMinuteHistorySource(budget: budget), requestBudget: budget)
-        dailyHistorySource = EastmoneyDailyHistorySource(budget: budget)
-        let eventSources: [any MarketEventSource] = [
-            CLSTelegraphSource(budget: budget),
-            EastmoneyNewsSource(budget: budget),
-            XueqiuUnavailableSource(),
-            ThePaperNewsSource(budget: budget),
-            GovCNPolicySource(budget: budget),
-            MIITUnavailableSource(),
-            CNInfoAnnouncementSource(budget: budget),
-            EastmoneyDragonTigerSource(budget: budget)
-        ]
-        let tagger = try? SectorTagger(bundle: .main)
-        eventCollector = EventCollector(store: store, sources: eventSources,
-            processor: EventProcessor(policy: Self.loadEventPolicy(), sectorTagger: tagger))
+        let endpoint = Self.validProviderEndpoint(analystEndpointText)
+        let modelID = analystModelText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let keyProvider: (any EventLLMAPIKeyProvider)? =
+            endpoint != nil && !modelID.isEmpty && AnalystAPIKeychain.hasKey()
+                ? CredentialStoreEventLLMAPIKeyProvider(store: KeychainCredentialStore())
+                : nil
+        let configuration = StockMonitorRuntimeConfiguration(
+            appGroupIdentifier: "group.com.cn00k.stockmonitorv6",
+            eventLLMEndpoint: endpoint,
+            eventLLMModelID: modelID.isEmpty ? nil : modelID,
+            eventLLMKeyProvider: keyProvider,
+            eventPolicy: Self.loadEventPolicy())
+        let runtime = FunctionalServiceFactory.makeDefault(configuration: configuration)
+        self.runtime = runtime
+        engine = runtime.engine
+        monitorStore = runtime.store
         analystConfigured = Self.validProviderEndpoint(analystEndpointText) != nil &&
             !analystModelText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && AnalystAPIKeychain.hasKey()
     }
@@ -107,8 +152,9 @@ final class MonitorViewModel: ObservableObject {
             await self.loadHealthDashboard()
             if let stoppingTask = self.stoppingTask { await stoppingTask.value }
             guard !Task.isCancelled, generation == self.lifecycleGeneration else { return }
+            let runtime = self.runtime
             let engine = self.engine
-            let startTask = Task { await engine.start() }
+            let startTask = Task { await runtime.startMonitoring() }
             while !Task.isCancelled && generation == self.lifecycleGeneration {
                 self.state = await engine.state()
                 self.synchronizeSelectedCode()
@@ -134,6 +180,9 @@ final class MonitorViewModel: ObservableObject {
         eventRefreshTask?.cancel()
         eventRefreshTask = nil
         isLoadingEvents = false
+        recentEventsTask?.cancel()
+        recentEventsTask = nil
+        isLoadingRecentEvents = false
         analystKeyInput = ""
         analystTask?.cancel()
         analystTask = nil
@@ -141,11 +190,22 @@ final class MonitorViewModel: ObservableObject {
         backtestTask?.cancel()
         backtestTask = nil
         isRunningBacktest = false
+        fullMarketScanTask?.cancel()
+        fullMarketScanTask = nil
+        isLoadingFullMarketCoverage = false
+        dailyReportTask?.cancel()
+        dailyReportTask = nil
+        dailyReportOperationID = nil
+        isBuildingDailyReport = false
+        fundamentalsTask?.cancel()
+        fundamentalsTask = nil
+        fundamentalsOperationID = nil
+        isRefreshingFundamentals = false
         let previousStop = stoppingTask
         stoppingTask = Task { [weak self] in
             if let previousStop { await previousStop.value }
             guard let self else { return }
-            await self.engine.stop()
+            await self.runtime.stopMonitoring()
             if let task { await task.value }
             self.state = await self.engine.state()
             if generation == self.lifecycleGeneration { self.stoppingTask = nil }
@@ -226,34 +286,100 @@ final class MonitorViewModel: ObservableObject {
         state = await engine.state()
     }
 
+    func refreshFullMarketCoverage() {
+        guard fullMarketScanTask == nil else { return }
+        isLoadingFullMarketCoverage = true
+        fullMarketCoverageMessage = "按需扫描公开 clist 数据，最多 60 页 / 6,000 只；当前进程缓存 15 分钟，结果可能不完整。"
+        fullMarketScanTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.isLoadingFullMarketCoverage = false
+                self.fullMarketScanTask = nil
+            }
+            do {
+                guard let coverage = try await self.runtime.fetchFullMarketCoverage() else {
+                    self.fullMarketCoverageMessage = "扩展扫描未启用或没有可用数据源。"
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                self.fullMarketCoverage = coverage
+                let relativeCoverage = coverage.summary.coverageComplete
+                    ? "唯一返回数与服务端 total 对齐（不代表官方全集）"
+                    : "覆盖不完整或受本地上限约束"
+                self.fullMarketCoverageMessage = coverage.status.requestCount == 0
+                    ? "使用 15 分钟内缓存，没有额外请求。\(relativeCoverage)。"
+                    : "扩展扫描返回 \(coverage.status.returnedCount) 行；服务端 total \(coverage.summary.reportedTotalCount.map(String.init) ?? "未知")；\(relativeCoverage)。"
+            } catch is CancellationError {
+                self.fullMarketCoverageMessage = "应用进入后台，已停止扩展扫描。"
+            } catch {
+                self.fullMarketCoverageMessage = "扩展扫描失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
     func refreshEvents() {
         guard eventRefreshTask == nil else { return }
         isLoadingEvents = true
         eventMessage = "正在前台按需采集公开资讯并保存到本机……"
         eventRefreshTask = Task { [weak self] in
             guard let self else { return }
-            let current = await self.engine.state()
+            let capabilities = await self.runtime.capabilities
+            let automaticLLMEnabled = capabilities.automaticEventLLM.enabled
+            if automaticLLMEnabled {
+                self.eventMessage = "正在采集并保存资讯；Keychain 密钥仍有效时，符合策略的 P1/P2 与条件 P3 事件会发送给已配置 Provider 增强。"
+            }
             let since = Date().addingTimeInterval(-7 * 24 * 60 * 60)
-            let report = await self.eventCollector.refresh(since: since, stockCodes: current.watchCodes)
+            let report = await self.runtime.refreshEvents(since: since)
             guard !Task.isCancelled else {
                 self.isLoadingEvents = false
                 self.eventRefreshTask = nil
                 return
             }
             self.eventStatuses = report.sourceStatuses
-            if report.storageError == nil, !report.visibleEvents.isEmpty {
-                await self.engine.evaluateEvents(report.visibleEvents)
-                self.state = await self.engine.state()
-            }
+            self.state = await self.engine.state()
             if let error = report.storageError {
                 self.eventMessage = "本地保存失败：\(error)"
             } else {
-                self.eventMessage = "收到 \(report.receivedCount) 条；SQLite 保存/更新 \(report.storedCount) 条逐源记录，当前去重过滤后保留 \(report.visibleCount) 条。资讯源可能延迟、限流或不可用。"
+                let enrichmentNote = automaticLLMEnabled
+                    ? " 符合策略的事件可能已发送至配置 Provider；用量取决于该服务返回。"
+                    : " 自动事件 LLM 未装配，未向 LLM Provider 发送事件。"
+                self.eventMessage = "收到 \(report.receivedCount) 条；SQLite 保存/更新 \(report.storedCount) 条逐源记录，当前去重过滤后保留 \(report.visibleCount) 条。资讯源可能延迟、限流或不可用。\(enrichmentNote)"
             }
-            self.eventSummary = try? await self.eventCollector.dailySummary()
+            self.eventSummary = try? await self.runtime.dailyEventSummary()
+            await self.readRecentEvents()
             await self.loadHealthDashboard()
             self.isLoadingEvents = false
             self.eventRefreshTask = nil
+        }
+    }
+
+    /// Reads the recent feed from local SQLite only. Network/LLM work remains
+    /// behind the separate explicit `refreshEvents()` action.
+    func loadRecentEvents() {
+        guard recentEventsTask == nil else { return }
+        isLoadingRecentEvents = true
+        recentEventsTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.isLoadingRecentEvents = false
+                self.recentEventsTask = nil
+            }
+            await self.readRecentEvents()
+        }
+    }
+
+    private func readRecentEvents() async {
+        let end = Date()
+        do {
+            try await monitorStore.open()
+            let all = try await monitorStore.fetchEvents(from: end.addingTimeInterval(-7 * 24 * 60 * 60), to: end)
+            recentEvents = Array(all.prefix(100))
+            recentEventsMessage = all.isEmpty
+                ? "本机近 7 天没有已保存事件；可点按“采集”后再查看。"
+                : "本机近 7 天已保存 \(all.count) 条事件；此页最多展示最新 100 条。"
+        } catch {
+            recentEvents = []
+            recentEventsMessage = "读取本地事件失败：\(error.localizedDescription)"
         }
     }
 
@@ -279,23 +405,29 @@ final class MonitorViewModel: ObservableObject {
     }
 
     func loadHealthDashboard() async {
+        guard !isLoadingHealthDashboard else { return }
+        isLoadingHealthDashboard = true
+        healthDashboardError = nil
+        defer { isLoadingHealthDashboard = false }
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
         let now = Date()
         let today = calendar.startOfDay(for: now)
         let start = calendar.date(byAdding: .day, value: -(SourceHealthThresholds.rollingDays - 1), to: today) ?? today
         do {
+            latestSessionUsage = try await runtime.latestSessionUsage()
             sourceHealthSnapshot = try await monitorStore.fetchSourceHealth(from: start, through: now)
             rawArchiveStats = try await monitorStore.rawArchiveStats()
+            healthDashboardUpdatedAt = Date()
         } catch {
-            eventSearchMessage = "读取本地健康面板失败：\(error.localizedDescription)"
+            healthDashboardError = "读取本地健康与会话数据失败：\(error.localizedDescription)"
         }
     }
 
     func generateDailySummary() {
         Task {
             do {
-                eventSummary = try await eventCollector.dailySummary()
+                eventSummary = try await runtime.dailyEventSummary()
                 eventMessage = "日报由本机 SQLite 中今日已采集事件即时生成；不会请求后台或 LLM。"
             } catch { eventMessage = "读取本地日报失败：\(error.localizedDescription)" }
         }
@@ -304,9 +436,173 @@ final class MonitorViewModel: ObservableObject {
     func exportEvents(_ format: EventExportFormat) {
         Task {
             do {
-                exportURL = try await eventCollector.exportFile(format: format)
+                var calendar = Calendar(identifier: .gregorian)
+                calendar.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+                let start = calendar.startOfDay(for: Date())
+                let end = calendar.date(byAdding: .day, value: 1, to: start) ?? start.addingTimeInterval(86_400)
+                exportURL = try await runtime.exportEventFile(from: start, to: end, format: format)
                 eventMessage = "已从本地 SQLite 生成 \(format.rawValue.uppercased()) 文件，可通过系统分享面板导出。"
             } catch { eventMessage = "导出失败：\(error.localizedDescription)" }
+        }
+    }
+
+    /// Builds a two-part Shanghai-day report exclusively from locally stored events.
+    func buildDailyReportPDF() {
+        guard !isBuildingDailyReport else { return }
+        isBuildingDailyReport = true
+        dailyReport = nil
+        dailyReportURL = nil
+        dailyReportMessage = "正在从本机 SQLite 生成今日事件日报；不会请求网络。"
+        let operationID = UUID()
+        dailyReportOperationID = operationID
+        dailyReportTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.dailyReportOperationID == operationID {
+                    self.isBuildingDailyReport = false
+                    self.dailyReportTask = nil
+                    self.dailyReportOperationID = nil
+                }
+            }
+            do {
+                var calendar = Calendar(identifier: .gregorian)
+                calendar.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+                let now = Date()
+                let start = calendar.startOfDay(for: now)
+                guard let noon = calendar.date(byAdding: .hour, value: 12, to: start),
+                      let end = calendar.date(byAdding: .day, value: 1, to: start) else {
+                    self.dailyReportMessage = "无法确定上海本地日报时间范围。"
+                    return
+                }
+                let firstHalf = ReportWindow(id: "first-half", title: "上半日（00:00–12:00）",
+                                             start: start, end: noon)
+                let secondHalf = ReportWindow(id: "second-half", title: "下半日（12:00–24:00）",
+                                              start: noon, end: end)
+                let report = try await self.runtime.buildEventReport(
+                    morning: firstHalf, midday: secondHalf, generatedAt: now)
+                guard !Task.isCancelled else { return }
+                let filename = "stock-monitor-daily-report-\(UUID().uuidString).pdf"
+                let url = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+                try await self.runtime.exportReportPDF(report, to: url)
+                guard !Task.isCancelled else { return }
+                self.dailyReport = report
+                self.dailyReportURL = url
+                let stateLabel: String
+                switch report.state {
+                case .data: stateLabel = "有本地记录"
+                case .partial: stateLabel = "部分数据"
+                case .noData: stateLabel = "无本地记录"
+                }
+                self.dailyReportMessage = "日报已生成（\(stateLabel)）；仅汇总本机已保存事件，来源状态和采集覆盖可能不完整。"
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.dailyReportMessage = "生成本地日报 PDF 失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// User-initiated refresh; the runtime caps this unofficial snapshot source at ten symbols.
+    func refreshFundamentalsForWatchlist() {
+        guard !isRefreshingFundamentals else { return }
+        let codes = Array(Set(state.watchCodes)).sorted()
+        guard !codes.isEmpty else {
+            fundamentalsMessage = "请先添加自选股；基本面刷新不会自行选择证券。"
+            fundamentalsSnapshots = []
+            return
+        }
+        isRefreshingFundamentals = true
+        fundamentalsMessage = "将向 Eastmoney 请求最多 10 只自选股的当前 F10 快照；不是历史点时数据。"
+        let operationID = UUID()
+        fundamentalsOperationID = operationID
+        fundamentalsTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.fundamentalsOperationID == operationID {
+                    self.isRefreshingFundamentals = false
+                    self.fundamentalsTask = nil
+                    self.fundamentalsOperationID = nil
+                }
+            }
+            guard let report = await self.runtime.refreshFundamentals(codes: codes) else {
+                guard !Task.isCancelled else { return }
+                self.fundamentalsSnapshots = []
+                self.fundamentalsMessage = "基本面数据源未启用；没有刷新。"
+                return
+            }
+            guard !Task.isCancelled else { return }
+            do {
+                self.fundamentalsSnapshots = try await self.runtime.latestFundamentals(codes: codes)
+                guard !Task.isCancelled else { return }
+                var details = "Eastmoney F10 当前快照：请求 \(report.status.requestCount) 次，返回 \(report.status.returnedCount)/\(report.status.requestedCount) 只。"
+                if let error = report.status.error { details += " 部分失败：\(error)" }
+                if !report.skippedCodes.isEmpty {
+                    details += " 未请求（10 只上限）：\(report.skippedCodes.joined(separator: "、"))。"
+                }
+                details += " 时间为本机抓取时间；不代表历史点时值。"
+                self.fundamentalsMessage = details
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.fundamentalsSnapshots = report.snapshots
+                self.fundamentalsMessage = "刷新已结束，但读取本地快照失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    func requestNotificationPermission() {
+        guard !isRequestingNotificationPermission else { return }
+        isRequestingNotificationPermission = true
+        notificationMessage = "正在请求系统通知权限；是否允许由你在系统提示中选择。"
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.isRequestingNotificationPermission = false }
+            do {
+                let granted = try await self.runtime.requestNotificationAuthorization()
+                self.notificationPermissionGranted = granted
+                self.notificationMessage = granted
+                    ? "系统已允许通知。只有点按下方投递按钮才会提交当前未读信号。"
+                    : "系统未授予通知权限；可在 iOS 设置中调整。"
+            } catch {
+                self.notificationMessage = "请求通知权限失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    func deliverUnreadAlertsNow() {
+        guard !isDeliveringAlerts else { return }
+        guard notificationPermissionGranted == true else {
+            notificationMessage = "请先点按“请求系统通知权限”并允许通知；当前没有发送任何通知。"
+            return
+        }
+        isDeliveringAlerts = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.isDeliveringAlerts = false }
+            do {
+                let delivered = try await self.runtime.deliverUnreadAlerts()
+                self.state = await self.engine.state()
+                self.notificationMessage = delivered
+                    ? "已将当前未读信号提交给本机通知中心。"
+                    : "没有可投递的未读信号，或当前平台没有通知投递能力。"
+            } catch {
+                self.notificationMessage = "本机通知投递失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    func exportDiagnostics() {
+        do {
+            let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+            let bundle = DiagnosticBundle(
+                metadata: DiagnosticBundleMetadata(generatedAt: Date(), appVersion: version),
+                sourceStatuses: state.sourceStatuses.map { DiagnosticSourceStatus($0) },
+                healthMetrics: sourceHealthSnapshot.map { DiagnosticHealthMetrics($0) })
+            let filename = "stock-monitor-diagnostics-\(UUID().uuidString).json"
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+            diagnosticExportURL = try DiagnosticBundleExporter.write(bundle, to: url)
+            diagnosticExportMessage = "已生成诊断 JSON；仅含版本、来源状态计数与本机健康汇总，不含股票代码、事件正文、持仓、Endpoint 或密钥。分享前仍请自行检查。"
+        } catch {
+            diagnosticExportURL = nil
+            diagnosticExportMessage = "生成诊断包失败：\(error.localizedDescription)"
         }
     }
 
@@ -365,7 +661,7 @@ final class MonitorViewModel: ObservableObject {
             analystModelText = model
             analystKeyInput = ""
             analystConfigured = true
-            analystSettingsMessage = "已配置。Endpoint 与 model 保存在本机设置；API key 仅保存在 iOS Keychain。"
+            analystSettingsMessage = "已配置。Endpoint 与 model 保存在本机设置；API key 仅保存在 iOS Keychain。Analyst 可立即使用；自动分级事件增强将在下次启动时按此配置装配。"
         } catch {
             analystConfigured = false
             analystSettingsMessage = error.localizedDescription
@@ -429,8 +725,8 @@ final class MonitorViewModel: ObservableObject {
         }
         let code = selectedAnalystCode
         let engine = self.engine
-        let collector = self.eventCollector
-        let analyst = self.analyst
+        let runtime = self.runtime
+        let monitorStore = self.monitorStore
         isAnalyzing = true
         analystResult = nil
         analystMessage = "已确认；正在读取所选股票的本地材料并直接调用配置的模型……"
@@ -448,7 +744,7 @@ final class MonitorViewModel: ObservableObject {
                 let allHistoryBars = try await engine.dailyBars(codes: [code], from: historyStart,
                     to: Self.lastCompleteDailyEnd(now: now))
                 let historyBars = allHistoryBars.suffix(60)
-                let eventRecords = try await collector.events(from: now.addingTimeInterval(-7 * 24 * 60 * 60), to: now)
+                let eventRecords = try await monitorStore.fetchEvents(from: now.addingTimeInterval(-7 * 24 * 60 * 60), to: now)
                 guard !Task.isCancelled else { return }
                 var material: [(Date, AnalystEvent)] = eventRecords
                     .filter { $0.stockCodes.contains(code) }
@@ -474,7 +770,7 @@ final class MonitorViewModel: ObservableObject {
                         high: $0.high, low: $0.low, close: $0.close, volume: $0.volume) },
                     events: selectedEvents)
                 guard !Task.isCancelled else { return }
-                let result = try await analyst.analyze(context: context,
+                let result = try await runtime.analyzeSelectedStock(context: context,
                     configuration: OnDemandAnalystConfiguration(endpoint: endpoint, modelID: modelID), apiKey: apiKey)
                 guard !Task.isCancelled else { return }
                 var calendar = Calendar(identifier: .gregorian)
@@ -504,7 +800,7 @@ final class MonitorViewModel: ObservableObject {
     }
 
     func runBacktest() {
-        guard state.phase == .live, !isRunningBacktest, !state.watchCodes.isEmpty,
+        guard !isRunningBacktest, !state.watchCodes.isEmpty,
               Self.backtestFactors.contains(backtestFactor), [20, 60, 120].contains(backtestSessions) else {
             backtestMessage = "请添加自选股并选择可用因子与 20/60/120 日窗口。"
             return
@@ -512,8 +808,7 @@ final class MonitorViewModel: ObservableObject {
         let codes = state.watchCodes
         let factor = backtestFactor
         let sessions = backtestSessions
-        let source = dailyHistorySource
-        let engine = self.engine
+        let runtime = self.runtime
         let now = Date()
         let to = Self.lastCompleteDailyEnd(now: now)
         var calendar = Calendar(identifier: .gregorian)
@@ -524,35 +819,308 @@ final class MonitorViewModel: ObservableObject {
         let from = calendar.startOfDay(for: fromCandidate)
         isRunningBacktest = true
         backtestReport = nil
+        backtestBootstrap = nil
         backtestSourceStatus = nil
-        backtestMessage = "仅对当前自选股串行请求日线；结果在本机计算中……"
+        backtestMessage = "仅读取本机已缓存日线，不会发起网络请求；正在本地计算……"
         backtestTask = Task { [weak self] in
             guard let self else { return }
             defer { self.isRunningBacktest = false; self.backtestTask = nil }
             do {
-                let batch = await source.fetchDailyHistory(codes: codes, from: from, to: to)
+                let cached = try await runtime.dailyBars(codes: codes, from: from, to: to)
                 guard !Task.isCancelled else { return }
-                self.backtestSourceStatus = batch.status
-                if !batch.bars.isEmpty { try await engine.saveDailyBars(batch.bars) }
-                guard !Task.isCancelled else { return }
-                let cached = try await engine.dailyBars(codes: codes, from: from, to: to)
-                guard !Task.isCancelled else { return }
+                guard !cached.isEmpty else {
+                    self.backtestMessage = "所选自选股和日期范围内没有本机日线缓存；没有生成回测结果，本次未联网。"
+                    return
+                }
                 let report = LocalBacktest.run(bars: cached, factor: factor, sampleSessions: sessions)
                 self.backtestReport = report
-                var message = "接口返回 \(batch.bars.count) 根日线；本地参与计算 \(cached.count) 根、覆盖 \(Set(cached.map(\.code)).count)/\(codes.count) 只自选股；请求 \(batch.status.requestCount) 次。"
-                if let error = batch.status.error { message += " 抓取状态：\(error)。" }
-                if !batch.skippedCodes.isEmpty { message += " 超出 50 只/无效代码：\(batch.skippedCodes.joined(separator: ", "))。" }
-                if !batch.warnings.isEmpty {
-                    let examples = batch.warnings.prefix(3).joined(separator: "；")
-                    message += " 部分代码失败：\(examples)\(batch.warnings.count > 3 ? " 等" : "")。"
+                if let topStratum = report.strata.first {
+                    let returns = LocalBacktestPerformanceAnalyzer.dailyReturns(from: topStratum.equityCurve)
+                    self.backtestBootstrap = LocalBacktestBootstrap.run(returns: returns,
+                        pathCount: 500, horizon: returns.count,
+                        seed: UInt64(report.sampleSessions + topStratum.sampleCount))
                 }
-                if cached.isEmpty { message += " 没有可用缓存数据；HTTP 200 空响应也按失败处理。" }
+                var message = "读取本机缓存 \(cached.count) 根日线，覆盖 \(Set(cached.map(\.code)).count)/\(codes.count) 只自选股；本次未联网。"
+                if let topStratum = report.strata.first {
+                    let metrics = LocalBacktestPerformanceAnalyzer.analyze(topStratum)
+                    message += " 最高因子组：年化收益 \(self.percent(metrics.annualizedReturn))、Sharpe \(self.metric(metrics.sharpeRatioZeroRiskFree))、最大回撤 \(self.percent(metrics.maximumDrawdown))、Calmar \(self.metric(metrics.calmarRatio))、胜率 \(self.percent(metrics.winRate))、盈亏比 \(self.metric(metrics.profitLossRatio))。"
+                }
                 self.backtestMessage = message
             } catch {
                 guard !Task.isCancelled else { return }
-                self.backtestMessage = "日线保存/读取失败：\(error.localizedDescription)"
+                self.backtestMessage = "读取本机日线缓存失败：\(error.localizedDescription)"
             }
         }
+    }
+
+    /// Reads only the existing local daily-bar cache; this does not refresh or call any source.
+    func calculateLocalCorrelation() async {
+        let codes = Array(Set(state.watchCodes)).sorted()
+        guard codes.count >= 2 else {
+            localCorrelationMessage = "至少需要两只自选股；请先加入自选并运行一次日线回测以填充本地缓存。"
+            localCorrelationMatrix = nil
+            return
+        }
+        isCalculatingLocalCorrelation = true
+        localCorrelationMessage = "正在读取本机已缓存日线；此操作不会请求网络。"
+        defer { isCalculatingLocalCorrelation = false }
+        let to = Date()
+        let from = to.addingTimeInterval(-540.0 * 86_400)
+        do {
+            let bars = try await runtime.dailyBars(codes: codes, from: from, to: to)
+            localCorrelationMatrix = LocalCorrelationAnalyzer.returnMatrix(bars: bars,
+                minimumObservations: 20)
+            localCorrelationMessage = "只读取 SQLite：\(bars.count) 根未复权日线，覆盖 \(Set(bars.map(\.code)).count)/\(codes.count) 只自选股；至少 20 个共同观测才显示系数。"
+            if bars.isEmpty { localCorrelationMessage = "本地没有缓存日线。请先运行一次日线回测；本次相关性计算仍不会访问网络。" }
+        } catch {
+            localCorrelationMatrix = nil
+            localCorrelationMessage = "读取本机日线缓存失败：\(error.localizedDescription)"
+        }
+    }
+
+    /// Reads a bounded window from SQLite only; it never refreshes history or calls a provider.
+    func cachedDailyBars(for code: String, limit: Int = 60) async throws -> [DailyBar] {
+        guard StockMonitorRoute.isSafeStockCode(code) else { return [] }
+        let safeLimit = min(max(limit, 1), 120)
+        let to = Date()
+        let from = to.addingTimeInterval(-3 * 366 * 24 * 60 * 60)
+        let bars = try await runtime.dailyBars(codes: [code], from: from, to: to)
+        return Array(bars.suffix(safeLimit))
+    }
+
+    /// Reads only local SQLite analytics and cached fundamentals. It never invokes a data source.
+    func loadLocalResearchPanels() async {
+        guard !localResearchIsLoading else { return }
+        localResearchIsLoading = true
+        defer { localResearchIsLoading = false }
+        localEventAnalyticsError = nil
+        localTickStatusError = nil
+
+        let now = Date()
+        do {
+            try await monitorStore.open()
+        } catch {
+            let message = "打开本地 SQLite 失败：\(error.localizedDescription)"
+            localEventAnalyticsError = message
+            localTickStatusError = message
+            localEventRejectionCounts = []
+            localEventKeywordReport = nil
+            localTickStatuses = []
+            localEventSankeyLayout = nil
+            localFactorForceGraphLayout = nil
+            localFactorCorrelationMatrix = nil
+            localFactorExposureResults = []
+            localFactorExplanation = message
+            localGraphExplanation = message
+            updateLocalSentimentFromAvailableCoverage()
+            return
+        }
+
+        do {
+            let counts = try await monitorStore.eventRejectionCounts(
+                from: now.addingTimeInterval(-24 * 60 * 60), to: now)
+            localEventRejectionCounts = counts.map { (reason: $0.key, count: $0.value) }
+                .sorted { left, right in
+                    left.count == right.count ? left.reason < right.reason : left.count > right.count
+                }
+            localEventKeywordReport = try await monitorStore.eventKeywordFrequencyReport(
+                now: now, window: 24 * 60 * 60, top: 20)
+        } catch {
+            localEventAnalyticsError = "读取本地治理分析失败：\(error.localizedDescription)"
+            localEventRejectionCounts = []
+            localEventKeywordReport = nil
+        }
+
+        do {
+            localTickStatuses = try await monitorStore.fetchLiveTickStatuses(limit: 32)
+        } catch {
+            localTickStatusError = "读取本地 tick/reconcile 记录失败：\(error.localizedDescription)"
+            localTickStatuses = []
+        }
+
+        do {
+            let from = now.addingTimeInterval(-7 * 24 * 60 * 60)
+            let storedEvents = try await monitorStore.fetchEvents(from: from, to: now)
+            let recent = Array(storedEvents.sorted { $0.fetchedAt > $1.fetchedAt }.prefix(500))
+            localEventSankeyLayout = Self.makeEventSankey(from: recent)
+            let taggedCount = recent.filter { !$0.sectors.isEmpty && !$0.sourceID.isEmpty }.count
+            localGraphExplanation = "Sankey 仅汇总近 7 天最多 500 条本地去重事件中的来源→板块标签关联数（每条记录按实际标签计数，不是资金流）。当前读取 \(recent.count) 条，其中 \(taggedCount) 条有来源和板块标签。因子网络只使用同一上海日期的本地缓存横截面；连线数值为 |Pearson r|，正负号见矩阵。缺少可验证输入时保持未知。"
+        } catch {
+            localEventSankeyLayout = nil
+            localGraphExplanation = "读取本地事件图输入失败：\(error.localizedDescription)；未生成占位节点。"
+        }
+
+        do {
+            let codes = Array(Set(state.watchCodes)).sorted()
+            let snapshots = try await runtime.latestFundamentals(codes: codes)
+            let research = Self.makeFactorResearch(from: snapshots)
+            localFactorCorrelationMatrix = research.matrix
+            localFactorExposureResults = research.exposures
+            localFactorExplanation = research.explanation
+            localFactorForceGraphLayout = research.matrix.flatMap { Self.makeFactorForceGraph(from: $0) }
+        } catch {
+            localFactorCorrelationMatrix = nil
+            localFactorExposureResults = []
+            localFactorForceGraphLayout = nil
+            localFactorExplanation = "读取本地基本面缓存失败：\(error.localizedDescription)；没有发起网络请求。"
+        }
+
+        updateLocalSentimentFromAvailableCoverage()
+    }
+
+    private func updateLocalSentimentFromAvailableCoverage() {
+        var observations: [LocalMarketSentimentComponent: LocalMarketSentimentObservation] = [:]
+        guard let coverage = fullMarketCoverage else {
+            localSentimentObservations = observations
+            localSentimentResult = LocalMarketSentiment.score(observations)
+            localSentimentExplanation = "本次应用会话尚无已加载的 clist 市场扫描样本；本面板不会自动扫描。六项成分均保持未知。"
+            return
+        }
+
+        let summary = coverage.summary
+        let validBreadthCount = summary.up + summary.flat + summary.down
+        if validBreadthCount > 0 {
+            let score = Double(summary.up - summary.down) / Double(validBreadthCount)
+            observations[.advancingDecliningBreadth] = LocalMarketSentimentObservation(
+                score: score,
+                metadata: LocalMarketSentimentMetadata(
+                    provenance: "\(coverage.status.sourceID) · 返回样本涨跌计数",
+                    sampleDescription: "有效涨跌字段 \(validBreadthCount) 条；服务端报告总数 \(summary.reportedTotalCount.map(String.init) ?? "未知")",
+                    sampleCount: validBreadthCount,
+                    measuredAt: coverage.status.fetchedAt))
+        }
+        localSentimentObservations = observations
+        localSentimentResult = LocalMarketSentiment.score(observations)
+        if validBreadthCount > 0 {
+            localSentimentExplanation = "只对 clist 已返回样本的有效涨跌家数计算净宽度 (\(summary.up)−\(summary.down))/\(validBreadthCount)；不代表全市场完整覆盖或未来走势。涨跌停、炸板、收益分布、资金流和市场参与度没有经验证输入时均保持未知；不会触发扫描。来源：\(coverage.status.sourceID)，返回 \(coverage.status.returnedCount) 行。"
+        } else {
+            localSentimentExplanation = "clist 扫描没有提供可用的涨跌家数（0 条有效变化字段）；净宽度分数未知。涨跌停、炸板、收益分布、资金流和市场参与度也保持未知；不会触发扫描。来源：\(coverage.status.sourceID)。"
+        }
+    }
+
+    private static func makeFactorResearch(from snapshots: [EastmoneyFundamentalSnapshot]) -> (
+        matrix: LocalFactorCorrelationMatrix?,
+        exposures: [LocalFactorExposureResult],
+        explanation: String
+    ) {
+        let factors: [FactorID] = [.pb, .roe, .grossMargin, .totalMarketValue]
+        let latestDate = snapshots.map(\.fetchedAt).max()
+        guard let latestDate else {
+            let emptyExposures = factors.map {
+                LocalFactorExposureAnalyzer.exposure($0, observations: [], weights: nil)
+            }
+            return (nil, emptyExposures,
+                "自选股没有本地缓存的 Eastmoney F10 基本面快照；未联网刷新。PE-TTM、PS、股息率及历史点时字段不由现有映射提供，保持未知。")
+        }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+        var latestByCode: [String: EastmoneyFundamentalSnapshot] = [:]
+        for snapshot in snapshots {
+            guard let code = snapshot.code else { continue }
+            if latestByCode[code].map({ $0.fetchedAt < snapshot.fetchedAt }) ?? true {
+                latestByCode[code] = snapshot
+            }
+        }
+        let sameDay = latestByCode.values
+            .filter { calendar.isDate($0.fetchedAt, inSameDayAs: latestDate) }
+            .sorted { ($0.code ?? "") < ($1.code ?? "") }
+        let symbolObservations = sameDay.compactMap { snapshot -> LocalFactorSymbolObservation? in
+            guard let code = snapshot.code else { return nil }
+            let raw = snapshot.factorObservation
+            let values = factors.reduce(into: [FactorID: Double]()) { result, factor in
+                if let value = FactorSubset.value(for: factor, observations: [raw]), value.isFinite {
+                    result[factor] = value
+                }
+            }
+            let provenance = "\(snapshot.sourceID) · 本地抓取 \(localResearchDate(snapshot.fetchedAt))"
+            return LocalFactorSymbolObservation(symbol: code, date: snapshot.fetchedAt,
+                                                values: values, provenance: provenance)
+        }
+        let observations = symbolObservations.map {
+            LocalFactorObservation(date: $0.date, values: $0.values, provenance: $0.provenance)
+        }
+        let matrix = observations.isEmpty ? nil : LocalFactorExposureAnalyzer.correlationMatrix(
+            factors, observations: observations, method: .pearson, minimumObservations: 3)
+        let exposures = factors.map {
+            LocalFactorExposureAnalyzer.exposure($0, observations: symbolObservations, weights: nil)
+        }
+        let explanation = "只读 SQLite 中自选股的本地基本面快照；\(symbolObservations.count) 只取同一上海自然日 \(localResearchDate(latestDate)) 的记录。当前可语义映射字段仅市净率、ROE、毛利率、总市值；PE-TTM 等不匹配/缺失字段不推断。相关矩阵是当前横截面 Pearson（至少 3 个有效配对），不是时间序列；没有明确市值权重时不计算组合加权暴露。抓取时间不是供应商时间戳，数据可能过期。"
+        return (matrix, exposures, explanation)
+    }
+
+    private static func localResearchDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return formatter.string(from: date)
+    }
+
+    private static func makeEventSankey(from events: [MarketEvent]) -> SankeyLayout? {
+        var counts: [LocalEventSankeyAssociation: Int] = [:]
+        for event in events where !event.sourceID.isEmpty {
+            for sector in event.sectors.prefix(8) where !sector.isEmpty {
+                counts[LocalEventSankeyAssociation(sourceID: event.sourceID, sectorTag: sector), default: 0] += 1
+            }
+        }
+        guard !counts.isEmpty else { return nil }
+
+        var sourceTotals: [String: Int] = [:]
+        var sectorTotals: [String: Int] = [:]
+        for (association, count) in counts {
+            sourceTotals[association.sourceID, default: 0] += count
+            sectorTotals[association.sectorTag, default: 0] += count
+        }
+        let topSources = Set(sourceTotals.sorted {
+            $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value
+        }.prefix(8).map(\.key))
+        let topSectors = Set(sectorTotals.sorted {
+            $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value
+        }.prefix(8).map(\.key))
+        let selected = counts.filter { topSources.contains($0.key.sourceID) && topSectors.contains($0.key.sectorTag) }
+            .sorted {
+                if $0.value != $1.value { return $0.value > $1.value }
+                if $0.key.sourceID != $1.key.sourceID { return $0.key.sourceID < $1.key.sourceID }
+                return $0.key.sectorTag < $1.key.sectorTag
+            }
+            .prefix(32)
+        guard !selected.isEmpty else { return nil }
+        let sourceIDs = Set(selected.map { "来源：\($0.key.sourceID)" })
+        let sectorIDs = Set(selected.map { "板块：\($0.key.sectorTag)" })
+        let nodes = (sourceIDs.union(sectorIDs)).sorted().map { GraphLayoutNodeInput(id: $0) }
+        let links = selected.map {
+            GraphLayoutLinkInput(sourceID: "来源：\($0.key.sourceID)",
+                                 targetID: "板块：\($0.key.sectorTag)", value: Double($0.value))
+        }
+        return GraphLayoutAlgorithms.sankey(nodes: nodes, links: links,
+            width: Double(StockMonitorTokens.Size.skeletonTwoThirds * 2),
+            height: Double(StockMonitorTokens.Size.heroSkeletonHeight),
+            nodeWidth: Double(StockMonitorTokens.Size.minimumHitTarget / 3),
+            nodePadding: Double(StockMonitorTokens.Space.small))
+    }
+
+    private static func makeFactorForceGraph(from matrix: LocalFactorCorrelationMatrix) -> ForceGraphLayout? {
+        var links: [GraphLayoutLinkInput] = []
+        guard matrix.cells.count == matrix.factors.count else { return nil }
+        for row in matrix.factors.indices {
+            guard row < matrix.cells.count else { continue }
+            for column in (row + 1)..<matrix.factors.count where column < matrix.cells[row].count {
+                let cell = matrix.cells[row][column]
+                guard cell.sampleCount >= 3, let coefficient = cell.coefficient,
+                      coefficient.isFinite, (-1...1).contains(coefficient) else { continue }
+                let source = FactorSubset.definitions[cell.left]?.displayName ?? cell.left.rawValue
+                let target = FactorSubset.definitions[cell.right]?.displayName ?? cell.right.rawValue
+                links.append(GraphLayoutLinkInput(sourceID: source, targetID: target,
+                                                  value: abs(coefficient)))
+            }
+        }
+        guard !links.isEmpty else { return nil }
+        let nodeIDs = Set(links.flatMap { [$0.sourceID, $0.targetID] })
+        let nodes = nodeIDs.sorted().map { GraphLayoutNodeInput(id: $0) }
+        return GraphLayoutAlgorithms.forceGraph(nodes: nodes, links: links,
+            width: Double(StockMonitorTokens.Size.skeletonTwoThirds * 2),
+            height: Double(StockMonitorTokens.Size.heroSkeletonHeight), iterations: 48)
     }
 
     private static func lastCompleteDailyEnd(now: Date) -> Date {
@@ -579,6 +1147,39 @@ final class MonitorViewModel: ObservableObject {
 
 struct MonitorView: View {
     @ObservedObject var model: MonitorViewModel
+
+    private enum SignalLevelFilter: String, CaseIterable, Identifiable {
+        case all, urgent, warning, info
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .all: return "全部"
+            case .urgent: return "紧急"
+            case .warning: return "警告"
+            case .info: return "提示"
+            }
+        }
+
+        var alertLevel: AlertLevel? {
+            switch self {
+            case .all: return nil
+            case .urgent: return .urgent
+            case .warning: return .warning
+            case .info: return .info
+            }
+        }
+    }
+
+    @State private var selectedSignalLevel: SignalLevelFilter = .all
+
+    private var visibleUnreadSignals: [AlertSignal] {
+        guard let level = selectedSignalLevel.alertLevel else {
+            return model.state.unreadSignals
+        }
+        return model.state.unreadSignals.filter { $0.level == level }
+    }
 
     private var quotesByCode: [String: Quote] {
         Dictionary((model.state.latestSnapshot?.quotes ?? []).map { ($0.code, $0) }, uniquingKeysWith: { _, new in new })
@@ -734,7 +1335,7 @@ struct MonitorView: View {
 
     private var backtestSection: some View {
         Section("单因子分层回测 · 本机") {
-            Text("仅当前自选股；没有可用成分股清单时不扩展 universe。只提供日线 OHLCV/成交额/换手率可算的 9 个因子。历史接口为非正式端点，串行请求；每前台会话最多 50 次、4 次/秒，与分钟补齐共享预算。")
+            Text("仅当前自选股；没有可用成分股清单时不扩展 universe。只提供日线 OHLCV/成交额/换手率可算的 9 个因子；仅读取本机 SQLite 已缓存日线，不发起网络请求。")
                 .font(.caption).foregroundStyle(.secondary)
             Picker("因子", selection: $model.backtestFactor) {
                 ForEach(MonitorViewModel.backtestFactors, id: \.self) { factor in
@@ -749,10 +1350,10 @@ struct MonitorView: View {
             Button {
                 model.runBacktest()
             } label: {
-                Label(model.isRunningBacktest ? "拉取日线并计算中……" : "下载自选股日线并本机回测",
+                Label(model.isRunningBacktest ? "读取本机日线并计算中……" : "用本机缓存运行回测",
                       systemImage: model.isRunningBacktest ? "hourglass" : "chart.bar.xaxis")
             }
-            .disabled(model.isRunningBacktest || model.state.watchCodes.isEmpty || model.state.phase != .live)
+            .disabled(model.isRunningBacktest || model.state.watchCodes.isEmpty)
             if let status = model.backtestSourceStatus {
                 Text("\(status.sourceID) · bars \(status.returnedCount) · 请求 \(status.requestCount) · 来源时间未单独确认")
                     .font(.caption)
@@ -1028,21 +1629,33 @@ struct MonitorView: View {
             if model.state.unreadSignals.isEmpty {
                 Text("暂无信号").foregroundStyle(.secondary)
             } else {
-                ForEach(model.state.unreadSignals) { signal in
-                    Button { model.markSignalRead(signal.id) } label: {
-                        HStack(alignment: .top) {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(signal.title).font(.headline).foregroundStyle(.primary)
-                                Text("\(signal.code) · \(signal.detail)")
-                                    .font(.caption).foregroundStyle(.secondary)
-                                Text(signal.createdAt.formatted(date: .omitted, time: .shortened))
-                                    .font(.caption2).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Text("已读").font(.caption).foregroundStyle(.blue)
-                        }
+                Picker("信号级别", selection: $selectedSignalLevel) {
+                    ForEach(SignalLevelFilter.allCases) { filter in
+                        Text(filter.title).tag(filter)
                     }
-                    .buttonStyle(.plain)
+                }
+                .pickerStyle(.segmented)
+                .accessibilityHint("只筛选当前本地未读信号，不读取或请求其他数据")
+
+                if visibleUnreadSignals.isEmpty {
+                    Text("该级别暂无未读信号").foregroundStyle(.secondary)
+                } else {
+                    ForEach(visibleUnreadSignals) { signal in
+                        Button { model.markSignalRead(signal.id) } label: {
+                            HStack(alignment: .top) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(signal.title).font(.headline).foregroundStyle(.primary)
+                                    Text("\(signal.code) · \(signal.detail)")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                    Text(signal.createdAt.formatted(date: .omitted, time: .shortened))
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Text("已读").font(.caption).foregroundStyle(.blue)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
         }

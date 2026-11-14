@@ -1,0 +1,9 @@
+{
+  "source_url": "https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=1.600000&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&beg=20261101&end=20261113&rtntype=6&klt=101&fqt=0",
+  "http_status": 200,
+  "retrieval_timestamp": "2026-11-14T04:39:19Z",
+  "byte_count": 995,
+  "sha256": "686bb3271fbba22942625ff6f3f02e2940bacfe5cebbab9d559d9226993575c1",
+  "content_type": "application/json",
+  "capture_note": "Unmodified public response body; no cookies or authentication."
+}

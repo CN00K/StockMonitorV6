@@ -1,0 +1,9 @@
+{
+  "source_url": "https://sousuo.www.gov.cn/search-gov/data?t=zhengcelibrary&q=%E8%AF%81%E5%88%B8&searchfield=title&sort=pubtime&sortType=1&p=0&n=20&type=gwyzcwjk",
+  "http_status": 200,
+  "retrieval_timestamp": "2026-11-14T04:39:18Z",
+  "byte_count": 81957,
+  "sha256": "96900a59268269c9005386505c03ae8d1443f5c7376fd9cbc2d91087af9fec16",
+  "content_type": "application/json",
+  "capture_note": "Unmodified public response body; no cookies or authentication."
+}

@@ -1,0 +1,55 @@
+name: Test SwiftPM on Linux
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  swiftpm-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Swift 6.0
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.0"
+
+      - name: Install SQLite development headers
+        run: sudo apt-get update && sudo apt-get install --yes libsqlite3-dev
+
+      - name: Run SwiftPM tests
+        run: swift test
+
+      - name: Test unused public Swift declaration scanner
+        run: python3 -m unittest discover -s Tests/Scripts -p 'test_*.py' -v
+
+  unused-public-swift-declarations:
+    name: Report unused Swift declaration candidates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Run deterministic candidate scanner
+        run: >-
+          python3 Scripts/report-unused-public-swift-declarations.py
+          --repo-root .
+          --output unused-public-swift-declarations.json
+          --text-output unused-public-swift-declarations.txt
+
+      - name: Upload candidate reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: unused-public-swift-declarations
+          path: |
+            unused-public-swift-declarations.json
+            unused-public-swift-declarations.txt
+          if-no-files-found: error

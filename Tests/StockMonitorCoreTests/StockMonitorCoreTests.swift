@@ -2,6 +2,11 @@ import XCTest
 @testable import StockMonitorCore
 
 final class StockMonitorCoreTests: XCTestCase {
+    override func tearDown() {
+        MarketClock.resetImportedHolidayCalendarsForTesting()
+        super.tearDown()
+    }
+
     func testSimHashIsStableAcrossWhitespaceAndCase() {
         let first = SimHash.fingerprint("Market  Alert  AAPL")
         let second = SimHash.fingerprint("market alert aapl")
@@ -43,6 +48,69 @@ final class StockMonitorCoreTests: XCTestCase {
             XCTAssertEqual(MarketClock.tradingDayStatus(holiday), .closed(reason: reason))
             XCTAssertFalse(MarketClock.isTradingSession(holiday))
         }
+    }
+
+    func testImportsValidOfficialHolidayPayloadAndKeepsAbsentDatesUnknown() throws {
+        let payload = OfficialHolidayCalendarPayload(
+            sourceTitle: "Official exchange notice", sourceURL: "https://www.sse.com.cn/notice",
+            retrievedOn: "2026-11-14", calendarYear: 2030,
+            closedDates: [OfficialHolidayClosure(date: "2030-01-01", name: "元旦")])
+        let data = try JSONEncoder().encode(payload)
+        XCTAssertEqual(try MarketClock.importOfficialHolidayCalendar(from: data), payload)
+        MarketClock.reloadImportedHolidayCalendarsForTesting()
+        XCTAssertTrue(MarketClock.calendarYearsWithEntries.contains(2030))
+        let formatter = ISO8601DateFormatter()
+        let closed = try XCTUnwrap(formatter.date(from: "2030-01-01T10:00:00+08:00"))
+        let absent = try XCTUnwrap(formatter.date(from: "2030-01-02T10:00:00+08:00"))
+        XCTAssertEqual(MarketClock.tradingDayStatus(closed), .closed(reason: "元旦"))
+        XCTAssertEqual(MarketClock.tradingDayStatus(absent), .unknown)
+    }
+
+    func testCalendarImportRequiresHTTPSOfficialExchangeHost() {
+        let untrusted = OfficialHolidayCalendarPayload(
+            sourceTitle: "Claimed exchange notice", sourceURL: "https://sse.com.cn.evil.example/notice",
+            retrievedOn: "2026-11-14", calendarYear: 2032,
+            closedDates: [OfficialHolidayClosure(date: "2032-01-01", name: "元旦")])
+        XCTAssertThrowsError(try MarketClock.updateOfficialHolidayCalendar(with: untrusted)) { error in
+            XCTAssertEqual(error as? OfficialHolidayImportError,
+                           .invalidProvenance("source must be an HTTPS SSE/SZSE/BSE URL without credentials or fragments"))
+        }
+        let insecure = OfficialHolidayCalendarPayload(
+            sourceTitle: "Exchange notice", sourceURL: "http://www.sse.com.cn/notice",
+            retrievedOn: "2026-11-14", calendarYear: 2032,
+            closedDates: [OfficialHolidayClosure(date: "2032-01-01", name: "元旦")])
+        XCTAssertThrowsError(try MarketClock.updateOfficialHolidayCalendar(with: insecure))
+        let absent = ISO8601DateFormatter().date(from: "2032-01-02T10:00:00+08:00")!
+        XCTAssertEqual(MarketClock.tradingDayStatus(absent), .unknown)
+    }
+
+    func testRejectsMalformedPayloadAndDuplicateDatesWithoutPartialUpdate() throws {
+        let duplicate = OfficialHolidayCalendarPayload(
+            sourceTitle: "Official exchange notice", sourceURL: "https://www.szse.cn/notice",
+            retrievedOn: "2026-11-14", calendarYear: 2031,
+            closedDates: [OfficialHolidayClosure(date: "2031-01-01", name: "元旦"),
+                          OfficialHolidayClosure(date: "2031-01-01", name: "重复")])
+        XCTAssertThrowsError(try MarketClock.updateOfficialHolidayCalendar(with: duplicate)) { error in
+            XCTAssertEqual(error as? OfficialHolidayImportError, .duplicateClosedDate("2031-01-01"))
+        }
+        let malformed = Data(#"{"version":1,"calendarYear":2031}"#.utf8)
+        XCTAssertThrowsError(try MarketClock.importOfficialHolidayCalendar(from: malformed))
+        let absent = try XCTUnwrap(ISO8601DateFormatter().date(from: "2031-01-02T10:00:00+08:00"))
+        XCTAssertEqual(MarketClock.tradingDayStatus(absent), .unknown)
+    }
+
+    func testImportPreservesExistingVerifiedHolidayDate() throws {
+        let payload = OfficialHolidayCalendarPayload(
+            sourceTitle: "Official exchange notice", sourceURL: "https://www.sse.com.cn/notice",
+            retrievedOn: "2026-11-14", calendarYear: 2026,
+            closedDates: [OfficialHolidayClosure(date: "2026-10-01", name: "替代名称"),
+                          OfficialHolidayClosure(date: "2026-12-31", name: "新增闭市")])
+        try MarketClock.updateOfficialHolidayCalendar(with: payload)
+        let formatter = ISO8601DateFormatter()
+        let existing = try XCTUnwrap(formatter.date(from: "2026-10-01T10:00:00+08:00"))
+        let added = try XCTUnwrap(formatter.date(from: "2026-12-31T10:00:00+08:00"))
+        XCTAssertEqual(MarketClock.tradingDayStatus(existing), .closed(reason: "国庆节"))
+        XCTAssertEqual(MarketClock.tradingDayStatus(added), .closed(reason: "新增闭市"))
     }
 
     func testRuleRequiresSustainedTicksAndHonorsCooldown() {

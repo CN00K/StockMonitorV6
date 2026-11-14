@@ -36,9 +36,9 @@ final class RuleFamilyEngineTests: XCTestCase {
             previousClose: 100, sourceID: "fixture", fetchedAt: time.addingTimeInterval(61))
     }
 
-    func testApprovedDefaultThresholdsForAllFourteenFamilies() throws {
+    func testApprovedDefaultThresholdsRemainAndSealBreakIsAdded() throws {
         let defaults = RuleFamilySettings.defaults
-        XCTAssertEqual(defaults.count, 14)
+        XCTAssertEqual(defaults.count, 18)
         func value(_ family: RuleFamily) throws -> RuleFamilySettings {
             try XCTUnwrap(defaults.first(where: { $0.family == family }))
         }
@@ -74,6 +74,13 @@ final class RuleFamilyEngineTests: XCTestCase {
         XCTAssertEqual(try value(.sectorEventCluster).minimumSources, 2)
         XCTAssertEqual(try value(.sectorEventCluster).windowSeconds, 3_600)
         XCTAssertEqual(try value(.sectorEventCluster).minimumPriority, 3)
+        XCTAssertEqual(try value(.sealBreak).threshold, 0.01)
+        XCTAssertEqual(try value(.sealBreak).confirmations, 1)
+        XCTAssertFalse(try value(.mainFlowSurge).enabled)
+        XCTAssertFalse(try value(.lateSessionPump).enabled)
+        XCTAssertEqual(try value(.mainFlowSurge).threshold, 50_000_000)
+        XCTAssertEqual(try value(.lateSessionPump).threshold, 25_000_000)
+        XCTAssertEqual(try value(.dragonTigerListing).minimumPriority, 3)
     }
 
     func testDailyChangeNeedsDistinctProviderSamplesAndCooldown() {
@@ -226,8 +233,8 @@ final class RuleFamilyEngineTests: XCTestCase {
         XCTAssertTrue(signals.contains { $0.ruleID == RuleFamily.relativeStrength.rawValue })
     }
 
-    func testQuietHoursMuteSignalsAndThereAreExactlyFourteenFamilies() {
-        XCTAssertEqual(RuleFamily.allCases.count, 14)
+    func testQuietHoursMuteSignalsAndThereAreEighteenFamilies() {
+        XCTAssertEqual(RuleFamily.allCases.count, 18)
         var engine = RuleFamilyEngine(settings: only(.dailyChange) { settings in
             settings.confirmations = 1
             settings.quietStartMinute = 9 * 60 + 45
@@ -276,6 +283,86 @@ final class RuleFamilyEngineTests: XCTestCase {
         XCTAssertTrue(clusterSignals.contains { $0.ruleID == RuleFamily.sectorEventCluster.rawValue })
         XCTAssertFalse(engine.evaluateEvents(clusterEvents, watchCodes: [], now: now.addingTimeInterval(1))
             .contains { $0.ruleID == RuleFamily.sectorEventCluster.rawValue })
+    }
+
+    func testSealBreakUsesUpperLimitTransitionAndCountsMultipleOpensPerDay() throws {
+        let start = date("2026-11-16T10:00:00+08:00")
+        var engine = RuleFamilyEngine(settings: only(.sealBreak))
+        let limit = LimitPair(up: 110, down: 90)
+        func evaluate(_ offset: TimeInterval, _ price: Double) -> [AlertSignal] {
+            let time = start.addingTimeInterval(offset)
+            let quote = quote(at: time, price: price, previous: 100, open: 100)
+            return engine.evaluate(current: MarketSnapshot(capturedAt: time, quotes: [quote],
+                limits: [code: limit]), holdings: [], now: time)
+        }
+        XCTAssertTrue(evaluate(0, 110).isEmpty, "The initial sealed state is not an alert.")
+        let firstBreak = evaluate(1, 109.99)
+        XCTAssertEqual(firstBreak.map(\.ruleID), [RuleFamily.sealBreak.rawValue])
+        XCTAssertTrue(firstBreak.first?.detail.contains("第1次") == true)
+        XCTAssertTrue(evaluate(2, 110).isEmpty)
+        let secondBreak = evaluate(3, 109.99)
+        XCTAssertTrue(secondBreak.first?.detail.contains("第2次") == true)
+        XCTAssertEqual(engine.checkpoint.sealBreakCountByCode?[code], 2)
+
+        let encoded = try JSONEncoder().encode(RuleFamilyCheckpoint())
+        let legacyPayload = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        let decoded = try JSONDecoder().decode(RuleFamilyCheckpoint.self,
+            from: JSONSerialization.data(withJSONObject: legacyPayload))
+        XCTAssertNil(decoded.sealedAtUpperLimitByCode)
+        XCTAssertNil(decoded.sealBreakCountByCode)
+    }
+
+    func testMoneyFlowRulesRequireFreshEastmoneyFlowAndLateSessionWindow() {
+        func flowQuote(_ time: Date, main: Double, superLarge: Double,
+                       flowTime: Date? = nil, source: String = "eastmoney_fflow",
+                       price: Double = 101, open: Double = 100) -> Quote {
+            Quote(code: code, name: "测试股", timestamp: time, price: price, previousClose: 100,
+                open: open, high: max(price, open), low: min(price, open), volume: 100,
+                amount: 10_000, mainNetInflow: main, superLargeNetInflow: superLarge,
+                moneyFlowTimestamp: flowTime ?? time, moneyFlowSourceID: source,
+                sourceID: "fixture", retrievedAt: time, timestampIsProvider: true)
+        }
+
+        let regularTime = date("2026-11-16T10:00:00+08:00")
+        var flowEngine = RuleFamilyEngine(settings: only(.mainFlowSurge) { $0.threshold = 50 })
+        let fresh = flowQuote(regularTime, main: 100, superLarge: 0)
+        XCTAssertTrue(flowEngine.evaluate(current: MarketSnapshot(capturedAt: regularTime, quotes: [fresh]),
+            holdings: [], now: regularTime).contains { $0.ruleID == RuleFamily.mainFlowSurge.rawValue })
+
+        var staleEngine = RuleFamilyEngine(settings: only(.mainFlowSurge) { $0.threshold = 50 })
+        let stale = flowQuote(regularTime.addingTimeInterval(1), main: 100,
+            superLarge: 0, flowTime: regularTime.addingTimeInterval(-121))
+        XCTAssertFalse(staleEngine.evaluate(current: MarketSnapshot(capturedAt: stale.timestamp, quotes: [stale]),
+            holdings: [], now: stale.timestamp).contains { $0.ruleID == RuleFamily.mainFlowSurge.rawValue })
+
+        var wrongSourceEngine = RuleFamilyEngine(settings: only(.mainFlowSurge) { $0.threshold = 50 })
+        let wrongSource = flowQuote(regularTime, main: 100, superLarge: 0, source: "eastmoney.clist.f62")
+        XCTAssertTrue(wrongSourceEngine.evaluate(current: MarketSnapshot(capturedAt: regularTime, quotes: [wrongSource]),
+            holdings: [], now: regularTime).isEmpty)
+
+        let late = date("2026-11-16T14:45:00+08:00")
+        var lateEngine = RuleFamilyEngine(settings: only(.lateSessionPump) { $0.threshold = 25 })
+        let lateQuote = flowQuote(late, main: 0, superLarge: 30)
+        XCTAssertTrue(lateEngine.evaluate(current: MarketSnapshot(capturedAt: late, quotes: [lateQuote]),
+            holdings: [], now: late).contains { $0.ruleID == RuleFamily.lateSessionPump.rawValue })
+        var earlyEngine = RuleFamilyEngine(settings: only(.lateSessionPump) { $0.threshold = 25 })
+        let early = date("2026-11-16T14:20:00+08:00")
+        let earlyQuote = flowQuote(early, main: 0, superLarge: 30)
+        XCTAssertTrue(earlyEngine.evaluate(current: MarketSnapshot(capturedAt: early, quotes: [earlyQuote]),
+            holdings: [], now: early).isEmpty)
+    }
+
+    func testDragonTigerRuleMatchesOnlyWatchlistAndDeduplicatesEvents() {
+        let now = date("2026-11-16T15:10:00+08:00")
+        var engine = RuleFamilyEngine(settings: only(.dragonTigerListing))
+        let event = MarketEvent(id: "lhb-600000-20261116", kind: .dragonTiger, sourceID: "eastmoney_lhb",
+            title: "龙虎榜：测试股上榜", body: "买入额：1亿", publishedAt: now, fetchedAt: now,
+            providerTimestampVerified: false, priority: 3, impactScope: .stock, stockCodes: [code])
+        let first = engine.evaluateEvents([event], watchCodes: [code], now: now)
+        XCTAssertEqual(first.map(\.ruleID), [RuleFamily.dragonTigerListing.rawValue])
+        XCTAssertTrue(first.first?.detail.contains("非实时上榜时间") == true)
+        XCTAssertTrue(engine.evaluateEvents([event], watchCodes: [code], now: now.addingTimeInterval(1)).isEmpty)
+        XCTAssertTrue(engine.evaluateEvents([event], watchCodes: [], now: now.addingTimeInterval(2)).isEmpty)
     }
 
     func testSQLitePersistsRuleFamilySettingsCheckpointAndLiveCommit() async throws {

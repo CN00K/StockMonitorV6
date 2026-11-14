@@ -1,0 +1,390 @@
+{
+  "candidates": [
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 64,
+      "name": "entryCount",
+      "path": "Sources/StockMonitorCore/ConditionalHTTPResponseCache.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 65,
+      "name": "storedByteCount",
+      "path": "Sources/StockMonitorCore/ConditionalHTTPResponseCache.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "struct",
+      "line": 174,
+      "name": "NoopDiagnosticLogger",
+      "path": "Sources/StockMonitorCore/Diagnostics.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "struct",
+      "line": 182,
+      "name": "OSLogDiagnosticLogger",
+      "path": "Sources/StockMonitorCore/Diagnostics.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "enum",
+      "line": 200,
+      "name": "DiagnosticBundleExporter",
+      "path": "Sources/StockMonitorCore/Diagnostics.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 96,
+      "name": "fetchFundamentals",
+      "path": "Sources/StockMonitorCore/EastmoneyFundamentalsSource.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 124,
+      "name": "exportFile",
+      "path": "Sources/StockMonitorCore/EventCollector.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "var",
+      "line": 166,
+      "name": "filterFiltered",
+      "path": "Sources/StockMonitorCore/EventProcessing.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "enum",
+      "line": 199,
+      "name": "FactorNormalization",
+      "path": "Sources/StockMonitorCore/FactorSubset.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 201,
+      "name": "winsorizeMAD",
+      "path": "Sources/StockMonitorCore/FactorSubset.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 213,
+      "name": "standardizeZScore",
+      "path": "Sources/StockMonitorCore/FactorSubset.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 227,
+      "name": "neutralizeByGroup",
+      "path": "Sources/StockMonitorCore/FactorSubset.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "struct",
+      "line": 33,
+      "name": "ATRValue",
+      "path": "Sources/StockMonitorCore/Indicators.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 177,
+      "name": "bollingerBands",
+      "path": "Sources/StockMonitorCore/Indicators.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 245,
+      "name": "saveDailyBars",
+      "path": "Sources/StockMonitorCore/LiveEngine.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "var",
+      "line": 133,
+      "name": "verifiedCalendarYears",
+      "path": "Sources/StockMonitorCore/MarketClock.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "var",
+      "line": 137,
+      "name": "calendarYearsWithEntries",
+      "path": "Sources/StockMonitorCore/MarketClock.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "struct",
+      "line": 469,
+      "name": "EastmoneyLimitUpPoolSource",
+      "path": "Sources/StockMonitorCore/MarketCoverageSources.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "enum",
+      "line": 254,
+      "name": "QuoteRegistryError",
+      "path": "Sources/StockMonitorCore/MarketDataSources.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "enum",
+      "line": 119,
+      "name": "MarketVenueCatalog",
+      "path": "Sources/StockMonitorCore/MarketVenueMetadata.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 148,
+      "name": "sessionStatus",
+      "path": "Sources/StockMonitorCore/MarketVenueMetadata.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 162,
+      "name": "localComponents",
+      "path": "Sources/StockMonitorCore/MarketVenueMetadata.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 138,
+      "name": "vwapBands",
+      "path": "Sources/StockMonitorCore/MinuteIndicators.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "var",
+      "line": 24,
+      "name": "positions",
+      "path": "Sources/StockMonitorCore/PortableBackupCodec.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "struct",
+      "line": 174,
+      "name": "PortableBackupCodec",
+      "path": "Sources/StockMonitorCore/PortableBackupCodec.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 975,
+      "name": "analystUsage",
+      "path": "Sources/StockMonitorCore/SQLiteMonitorStore.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 42,
+      "name": "isDuplicate",
+      "path": "Sources/StockMonitorCore/SimHash.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "var",
+      "line": 47,
+      "name": "canProceed",
+      "path": "Sources/StockMonitorCore/SourceFailurePolicy.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "var",
+      "line": 48,
+      "name": "shouldRetry",
+      "path": "Sources/StockMonitorCore/SourceFailurePolicy.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 180,
+      "name": "allow",
+      "path": "Sources/StockMonitorCore/SourceFailurePolicy.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 181,
+      "name": "shouldAllow",
+      "path": "Sources/StockMonitorCore/SourceFailurePolicy.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 222,
+      "name": "reset",
+      "path": "Sources/StockMonitorCore/SourceFailurePolicy.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 223,
+      "name": "currentState",
+      "path": "Sources/StockMonitorCore/StockMonitorFunctionalRuntime.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 257,
+      "name": "buildEventReport",
+      "path": "Sources/StockMonitorCore/StockMonitorFunctionalRuntime.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 265,
+      "name": "exportReportPDF",
+      "path": "Sources/StockMonitorCore/StockMonitorFunctionalRuntime.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 287,
+      "name": "refreshFundamentals",
+      "path": "Sources/StockMonitorCore/StockMonitorFunctionalRuntime.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 296,
+      "name": "latestFundamentalObservations",
+      "path": "Sources/StockMonitorCore/StockMonitorFunctionalRuntime.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 302,
+      "name": "refreshDailyHistory",
+      "path": "Sources/StockMonitorCore/StockMonitorFunctionalRuntime.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 342,
+      "name": "exportEncryptedBackup",
+      "path": "Sources/StockMonitorCore/StockMonitorFunctionalRuntime.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 346,
+      "name": "restoreEncryptedBackup",
+      "path": "Sources/StockMonitorCore/StockMonitorFunctionalRuntime.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 351,
+      "name": "deliverUnreadAlerts",
+      "path": "Sources/StockMonitorCore/StockMonitorFunctionalRuntime.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 359,
+      "name": "applyAlertAction",
+      "path": "Sources/StockMonitorCore/StockMonitorFunctionalRuntime.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 373,
+      "name": "requestNotificationAuthorization",
+      "path": "Sources/StockMonitorCore/StockMonitorFunctionalRuntime.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 18,
+      "name": "treemapAreaShares",
+      "path": "Sources/StockMonitorCore/VisualizationMapping.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    },
+    {
+      "access": "public",
+      "kind": "func",
+      "line": 77,
+      "name": "largestTriangleThreeBuckets",
+      "path": "Sources/StockMonitorCore/VisualizationMapping.swift",
+      "rationale": "No apparent textual reference remains after excluding declaration spellings; external clients, protocol/dynamic dispatch, and reflection are not observable here."
+    }
+  ],
+  "deterministic": true,
+  "exclusions": [
+    ".build",
+    ".git",
+    "Carthage",
+    "DerivedData",
+    "Packages",
+    "Pods"
+  ],
+  "rationale": [
+    "A candidate has no apparent textual reference in the scanned Swift files after its declaration spelling is discounted.",
+    "Candidates are not proof of dead code: external clients, protocol requirements, Objective-C/dynamic dispatch, reflection, generated entry points, and linker/runtime use can be legitimate.",
+    "Protocol members are excluded because requirements are commonly consumed through conformances or dynamic dispatch that a lexical scan cannot prove.",
+    "No API is modified or deleted by this tool."
+  ],
+  "roots": [
+    "Sources",
+    "App"
+  ],
+  "schema": "unused-public-swift-declarations/v1",
+  "status": "candidate-report",
+  "summary": {
+    "candidates": 45,
+    "public_declarations": 1873,
+    "swift_files": 81
+  }
+}

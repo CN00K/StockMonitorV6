@@ -15,6 +15,10 @@ public enum RuleFamily: String, Codable, CaseIterable, Sendable, Hashable, Ident
     case holdingPnL = "holding_pnl"
     case majorWatchlistEvent = "major_watchlist_event"
     case sectorEventCluster = "sector_event_cluster"
+    case sealBreak = "seal_break"
+    case mainFlowSurge = "main_flow_surge"
+    case lateSessionPump = "late_session_pump"
+    case dragonTigerListing = "dragon_tiger_listing"
 
     public var id: String { rawValue }
 
@@ -34,6 +38,10 @@ public enum RuleFamily: String, Codable, CaseIterable, Sendable, Hashable, Ident
         case .holdingPnL: return "持仓浮盈/浮亏"
         case .majorWatchlistEvent: return "自选股重大资讯"
         case .sectorEventCluster: return "板块事件聚集"
+        case .sealBreak: return "封板后开板"
+        case .mainFlowSurge: return "主力资金净流入突增"
+        case .lateSessionPump: return "尾盘资金推动"
+        case .dragonTigerListing: return "龙虎榜上榜"
         }
     }
 
@@ -53,6 +61,9 @@ public enum RuleFamily: String, Codable, CaseIterable, Sendable, Hashable, Ident
         case .holdingPnL: return "成本浮盈/浮亏阈值 (%)"
         case .majorWatchlistEvent: return "最低来源优先级 (P1–P5)"
         case .sectorEventCluster: return "独立事件最少条数"
+        case .sealBreak: return "接近本地估算涨停价的容差 (CNY)"
+        case .mainFlowSurge, .lateSessionPump: return "每分钟资金流入阈值 (CNY)"
+        case .dragonTigerListing: return "最低榜单优先级 (P1–P5)"
         }
     }
 }
@@ -125,7 +136,14 @@ public struct RuleFamilySettings: Codable, Sendable, Equatable, Identifiable {
             .init(family: .majorWatchlistEvent, threshold: 3, confirmations: 1, cooldownSeconds: 0, sessionOnly: false),
             .init(family: .sectorEventCluster, threshold: 3, confirmations: 1, cooldownSeconds: 0,
                   windowSeconds: 60 * 60, minimumIndependentEvents: 3, minimumSources: 2,
-                  minimumPriority: 3, sessionOnly: false)
+                  minimumPriority: 3, sessionOnly: false),
+            .init(family: .sealBreak, threshold: 0.01, confirmations: 1, cooldownSeconds: 0),
+            .init(family: .mainFlowSurge, enabled: false, threshold: 50_000_000,
+                  confirmations: 1, cooldownSeconds: 15 * 60),
+            .init(family: .lateSessionPump, enabled: false, threshold: 25_000_000,
+                  confirmations: 1, cooldownSeconds: 30 * 60),
+            .init(family: .dragonTigerListing, threshold: 3, confirmations: 1,
+                  cooldownSeconds: 0, sessionOnly: false)
         ]
     }
 
@@ -193,6 +211,9 @@ public struct RuleFamilyCheckpoint: Codable, Sendable, Equatable {
     public var processedEventIDs: Set<String>
     public var recentSectorEvents: [MarketEvent]
     public var firedSectorClusterKeys: Set<String>
+    /// Optional for decoding checkpoints written before the seal-break rule existed.
+    public var sealedAtUpperLimitByCode: [String: Bool]? = nil
+    public var sealBreakCountByCode: [String: Int]? = nil
 
     public init(confirmationCounts: [String: Int] = [:], lastFiredAt: [String: Date] = [:],
                 firedDailyKeys: Set<String> = [], quoteHistoryByKey: [String: [Quote]] = [:],
@@ -293,7 +314,7 @@ public struct RuleFamilyEngine: Sendable {
         var signals: [AlertSignal] = []
         for quote in quotes.sorted(by: { $0.code < $1.code }) {
             resetDailyStateIfNeeded(code: quote.code, at: quote.timestamp)
-            signals.append(contentsOf: evaluateQuote(quote, holdings: holdings, now: now))
+                signals.append(contentsOf: evaluateQuote(quote, limits: current.limits[quote.code], holdings: holdings, now: now))
         }
         signals.append(contentsOf: evaluateRelativeStrength(quotes: quotes, indices: indices, now: now))
         signals.append(contentsOf: evaluateMinuteBars(builtBars, now: now))
@@ -327,6 +348,17 @@ public struct RuleFamilyEngine: Sendable {
     public mutating func evaluateEvents(_ events: [MarketEvent], watchCodes: [String], now: Date) -> [AlertSignal] {
         var signals: [AlertSignal] = []
         let watch = Set(watchCodes)
+        let dragonTiger = setting(.dragonTigerListing)
+        if allowed(dragonTiger, at: now), dragonTiger.enabled {
+            for event in events where event.kind == .dragonTiger && event.priority >= dragonTiger.minimumPriority {
+                guard let code = event.stockCodes.filter({ watch.contains($0) }).sorted().first,
+                      state.processedEventIDs.insert(event.id).inserted else { continue }
+                signals.append(AlertSignal(code: code, ruleID: RuleFamily.dragonTigerListing.rawValue,
+                    level: .warning, title: event.title,
+                    detail: "榜单交易日可见；榜单数据为公开非官方汇总，非实时上榜时间。\(event.body ?? "")",
+                    createdAt: now))
+            }
+        }
         let major = settingsByFamily[.majorWatchlistEvent] ?? RuleFamilySettings.defaultsByFamily()[.majorWatchlistEvent]!
         if allowed(major, at: now) {
             for event in events.sorted(by: { eventTime($0) < eventTime($1) }) {
@@ -364,9 +396,57 @@ public struct RuleFamilyEngine: Sendable {
         return signals
     }
 
-    private mutating func evaluateQuote(_ quote: Quote, holdings: [Holding], now: Date) -> [AlertSignal] {
+    private mutating func evaluateQuote(_ quote: Quote, limits: LimitPair?, holdings: [Holding], now: Date) -> [AlertSignal] {
         var result: [AlertSignal] = []
         let code = quote.code
+
+        let flowAge = quote.moneyFlowTimestamp.map { now.timeIntervalSince($0) }
+        let hasFreshEastmoneyFlow = quote.moneyFlowSourceID == "eastmoney_fflow"
+            && flowAge.map { $0 >= -60 && $0 <= 120 } == true
+        if hasFreshEastmoneyFlow {
+            let flowSettings = setting(.mainFlowSurge)
+            if allowed(flowSettings, at: now), let inflow = quote.mainNetInflow,
+               inflow >= flowSettings.threshold,
+               let signal = fire(.mainFlowSurge, code: code, direction: "up", daily: false,
+                    settings: flowSettings, level: .warning, title: "主力资金净流入突增",
+                    detail: String(format: "Eastmoney 每分钟主力净流入 %.0f CNY（公开非官方估算）", inflow), at: now) {
+                result.append(signal)
+            }
+
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = MarketClock.timeZone
+            let components = calendar.dateComponents([.hour, .minute], from: now)
+            let minuteOfDay = (components.hour ?? 0) * 60 + (components.minute ?? 0)
+            let lateSession = minuteOfDay >= 14 * 60 + 30 && minuteOfDay < 15 * 60
+            let lateSettings = setting(.lateSessionPump)
+            if lateSession, allowed(lateSettings, at: now), quote.price > quote.open,
+               let superLarge = quote.superLargeNetInflow, superLarge >= lateSettings.threshold,
+               let signal = fire(.lateSessionPump, code: code, direction: "up", daily: false,
+                    settings: lateSettings, level: .warning, title: "尾盘资金推动",
+                    detail: String(format: "尾盘股价高于开盘价；Eastmoney 每分钟超大单净流入 %.0f CNY（公开非官方估算）", superLarge), at: now) {
+                result.append(signal)
+            }
+        }
+
+        if let upper = limits?.up, upper.isFinite, upper > 0 {
+            let isSealed = abs(quote.price - upper) < 0.01
+            let wasSealed = state.sealedAtUpperLimitByCode?[code] ?? false
+            if wasSealed && !isSealed {
+                var counts = state.sealBreakCountByCode ?? [:]
+                let openCount = counts[code, default: 0] + 1
+                counts[code] = openCount
+                state.sealBreakCountByCode = counts
+                let settings = setting(.sealBreak)
+                if let signal = fire(.sealBreak, code: code, direction: "break", daily: false,
+                    settings: settings, level: .warning, title: "封板后开板",
+                    detail: String(format: "第%d次离开本地估算涨停价 %.2f CNY（限价为公式估算，非权威源）", openCount, upper), at: now) {
+                    result.append(signal)
+                }
+            }
+            var sealed = state.sealedAtUpperLimitByCode ?? [:]
+            sealed[code] = isSealed
+            state.sealedAtUpperLimitByCode = sealed
+        }
 
         let daily = setting(.dailyChange)
         if allowed(daily, at: now) {
@@ -696,6 +776,8 @@ public struct RuleFamilyEngine: Sendable {
         let day = Self.dayKey(date)
         guard state.sessionDayByCode[code] != day else { return }
         state.sessionDayByCode[code] = day
+        state.sealedAtUpperLimitByCode?.removeValue(forKey: code)
+        state.sealBreakCountByCode?.removeValue(forKey: code)
         state.observedHighByCode.removeValue(forKey: code)
         state.observedLowByCode.removeValue(forKey: code)
         state.vwapVolumeByCode[code] = 0

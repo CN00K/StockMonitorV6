@@ -74,6 +74,39 @@ final class DataSourceTests: XCTestCase {
         XCTAssertEqual(result.sourceStatuses.first?.requestCount, 1)
     }
 
+    func testRegistryAppliesBackoffAndCircuitBeforeCallingFailedSourceAgain() async throws {
+        let primaryCounter = SourceCallCounter()
+        let primary = CountingQuoteSource(identifier: "primary", counter: primaryCounter, shouldFail: true)
+        let fallback = StubQuoteSource(identifier: "fallback", shouldFail: false,
+                                       quoteTime: Date(timeIntervalSince1970: 1_800_000_000))
+        let fixedNow = Date(timeIntervalSince1970: 1_800_000_000)
+        let policy = SourceFailurePolicy(now: { fixedNow }, jitter: { 0.5 }, threshold: 1, circuitDuration: 60)
+        let registry = QuoteSourceRegistry(sources: [primary, fallback], failurePolicy: policy)
+
+        let first = await registry.fetch(codes: ["600000"], indices: [])
+        let second = await registry.fetch(codes: ["600000"], indices: [])
+        let calls = await primaryCounter.value
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(first.quotes.first?.sourceID, "fallback")
+        XCTAssertEqual(second.quotes.first?.sourceID, "fallback")
+        XCTAssertEqual(second.sourceStatuses.first?.requestCount, 0)
+        XCTAssertTrue(second.sourceStatuses.first?.note?.contains("failure gate") == true)
+    }
+
+    func testRegistryExcludesAndReportsSuspectOrdinaryStockQuote() async {
+        let time = Date(timeIntervalSince1970: 1_800_000_000)
+        let suspect = Quote(code: "600000", name: "fixture", timestamp: time, price: 13,
+            previousClose: 10, open: 10, high: 13, low: 10, volume: 100,
+            sourceID: "bad-price", retrievedAt: time)
+        let bad = FixedQuoteSource(identifier: "bad-price", quotes: [suspect])
+        let fallback = StubQuoteSource(identifier: "fallback", shouldFail: false, quoteTime: time)
+        let result = await QuoteSourceRegistry(sources: [bad, fallback]).fetch(codes: ["600000"], indices: [])
+        XCTAssertEqual(result.quotes.first?.sourceID, "fallback")
+        XCTAssertEqual(result.suspectCodes, ["600000"])
+        XCTAssertTrue(result.sourceStatuses.first?.note?.contains("Rejected suspect") == true)
+        XCTAssertFalse(QuoteQualityGate.isSuspect(suspect, newListingCodes: ["600000"]))
+    }
+
     func testRequestBudgetEnforcesPerSessionCapAndCanReset() async throws {
         let budget = RequestBudget(policies: ["fixture": .init(requestsPerSecond: 100, maximumPerSession: 1)])
         try await budget.acquire(host: "fixture")
@@ -134,5 +167,34 @@ private struct StubQuoteSource: MarketQuoteSource {
             sourceID: identifier, fetchedAt: quoteTime, providerTimestamp: quoteTime,
             requestedCount: codes.count + indices.count, returnedCount: quotes.count,
             requestCount: 1))
+    }
+}
+
+private actor SourceCallCounter {
+    private(set) var value = 0
+    func increment() { value += 1 }
+}
+
+private struct CountingQuoteSource: MarketQuoteSource {
+    let identifier: String
+    let counter: SourceCallCounter
+    let shouldFail: Bool
+
+    func fetchMarketData(codes: [String], indices: [MarketIndex]) async throws -> ProviderQuoteBatch {
+        await counter.increment()
+        if shouldFail { throw QuoteSourceError.httpStatus(429) }
+        return try await StubQuoteSource(identifier: identifier, shouldFail: false,
+            quoteTime: Date(timeIntervalSince1970: 1_800_000_000)).fetchMarketData(codes: codes, indices: indices)
+    }
+}
+
+private struct FixedQuoteSource: MarketQuoteSource {
+    let identifier: String
+    let quotes: [Quote]
+
+    func fetchMarketData(codes: [String], indices: [MarketIndex]) async throws -> ProviderQuoteBatch {
+        ProviderQuoteBatch(quotes: quotes.filter { codes.contains($0.code) }, indexQuotes: [], status: SourceStatus(
+            sourceID: identifier, fetchedAt: Date(timeIntervalSince1970: 1_800_000_000),
+            requestedCount: codes.count + indices.count, returnedCount: quotes.count, requestCount: 1))
     }
 }

@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StockDetail K线 · 静态界面草图</title>
+<style>
+:root{color-scheme:dark;--paper0:#080D14;--paper1:#101923;--paper2:#1A2633;--ink:#F3F6F8;--secondary:#CED7E0;--muted:#9EADBC;--hair:#425363;--accent:#55E0BE;--up:#43D79A;--down:#FF7180;--flat:#C0CBD5}
+*{box-sizing:border-box}body{margin:0;background:#10141a;color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","PingFang SC",sans-serif}.mockup{width:452px;margin:18px auto 22px}.label{font-size:12px;font-weight:700;letter-spacing:.12em;color:#cbd5df;text-align:center;margin:0 0 12px}.phone{width:402px;height:874px;margin:auto;padding:10px;border:1px solid #596473;border-radius:47px;background:#070a0f;box-shadow:0 18px 48px #0008}.screen{height:852px;overflow:hidden;border-radius:37px;background:var(--paper0);border:1px solid #202a35}.status{height:30px;padding:6px 23px 0;display:flex;align-items:center;justify-content:space-between;font-size:12px;font-weight:650}.status-icons{letter-spacing:2px;font-size:11px}.nav{height:39px;display:grid;grid-template-columns:64px 1fr 64px;align-items:center;padding:0 18px;border-bottom:1px solid #1b2733}.nav .back{font-size:14px;color:var(--accent)}.nav .title{text-align:center;font-size:16px;font-weight:650}.identity{padding:15px 18px 12px}.name-row{display:flex;align-items:baseline;gap:8px}.name{font-size:20px;font-weight:650}.code{font-size:12px;color:var(--muted);font-family:ui-monospace,monospace}.price-row{display:flex;align-items:baseline;gap:9px;margin-top:8px}.price{font-size:31px;font-weight:650;letter-spacing:-.03em}.change{color:var(--up);font-size:13px;font-weight:650}.provenance{font-size:10px;color:var(--muted);margin-top:2px}.segments{margin:0 16px 13px;height:37px;padding:3px;display:grid;grid-template-columns:1fr 1fr;border-radius:9px;background:var(--paper2);font-size:13px}.segments span{display:grid;place-items:center;color:var(--muted)}.segments .selected{border-radius:7px;color:var(--ink);font-weight:650;background:#344657;box-shadow:0 1px 4px #0005}.content{height:calc(100% - 30px - 39px);overflow:hidden;padding:0 14px 20px}.surface{padding:14px;border:1px solid var(--hair);border-radius:16px;background:var(--paper1)}.surface-head{display:flex;justify-content:space-between;align-items:center;font-size:14px;font-weight:650}.refresh{color:var(--accent);font-size:18px}.note{font-size:10px;line-height:1.45;color:var(--muted);margin:7px 0 11px}.metrics{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:13px}.metric{min-height:58px;border:1px solid #334351;border-radius:10px;padding:8px;background:#131f2a}.metric .label2{font-size:9px;color:var(--muted)}.metric .value{font-size:15px;font-weight:650;margin-top:4px;font-variant-numeric:tabular-nums}.metric .detail{font-size:9px;color:var(--secondary);margin-top:2px}.positive{color:var(--up)}.chart-heading{display:flex;align-items:center;justify-content:space-between;margin:2px 0 7px}.chart-title{font-size:14px;font-weight:650}.count{font-size:10px;color:var(--muted)}.legend{display:flex;gap:12px;align-items:center;margin-bottom:6px;font-size:10px;color:var(--secondary)}.legend span{display:flex;align-items:center;gap:4px}.dot{width:7px;height:7px;border-radius:50%;display:inline-block}.chart-wrap{display:flex;align-items:stretch;gap:7px;padding:8px 7px 5px;border-radius:9px;background:var(--paper2)}.y-axis{height:140px;width:43px;display:flex;flex-direction:column;justify-content:space-between;align-items:flex-end;font:9px ui-monospace,monospace;color:var(--muted);padding:0 0 2px}.plot{height:140px;flex:1;min-width:0}.x-axis{margin:5px 0 0 50px;display:flex;justify-content:space-between;font-size:9px;color:var(--muted)}.chart-caption{font-size:9px;line-height:1.4;color:var(--muted);margin:7px 0 10px}.divider{height:1px;background:var(--hair);opacity:.75;margin:10px 0}.recent-title{font-size:13px;font-weight:650;margin-bottom:5px}.row{display:grid;grid-template-columns:1fr repeat(4,auto);gap:6px;padding:6px 0;border-bottom:1px solid #273542;font:9px ui-monospace,monospace;color:var(--secondary)}.row .date{color:var(--muted)}.row .close{color:var(--ink)}.source{font-size:9px;color:var(--muted);line-height:1.4;margin-top:8px}.footer{font-size:10px;line-height:1.45;text-align:center;color:#b3bdc7;margin:11px auto 0;max-width:400px}.safe-area{height:5px}
+</style>
+</head>
+<body>
+<main class="mockup">
+  <p class="label">静态界面草图 · 非运行时截图</p>
+  <div class="phone">
+    <div class="screen">
+      <div class="status"><span>9:41</span><span class="status-icons">●●●  Wi‑Fi  ▰</span></div>
+      <div class="nav"><span class="back">‹ 返回</span><span class="title">证券详情</span><span></span></div>
+      <div class="identity">
+        <div class="name-row"><span class="name">浦发银行</span><span class="code">600000</span></div>
+        <div class="price-row"><span class="price">10.40</span><span class="change">+0.19%</span></div>
+        <div class="provenance">本机历史样例 · 未复权日线 · 来源时间不代表实时</div>
+      </div>
+      <div class="segments"><span>概览</span><span class="selected">K线</span></div>
+      <div class="content">
+        <section class="surface">
+          <div class="surface-head"><span>▣　本机缓存日线</span><span class="refresh">↻</span></div>
+          <p class="note">仅查询 SQLite 已保存记录；打开或刷新此页都不会请求网络。日线未复权。</p>
+          <div class="metrics">
+            <div class="metric"><div class="label2">缓存记录</div><div class="value">10 条</div><div class="detail">最多展示最近 60 条</div></div>
+            <div class="metric"><div class="label2">交易日范围</div><div class="value">11月2日</div><div class="detail">至 11月13日</div></div>
+            <div class="metric"><div class="label2">首末收盘变化</div><div class="value positive">+3.38%</div><div class="detail">首条与末条缓存收盘价</div></div>
+            <div class="metric"><div class="label2">最新缓存收盘</div><div class="value">¥10.40</div><div class="detail">2026年11月13日</div></div>
+          </div>
+          <div class="chart-heading"><span class="chart-title">日K线</span><span class="count">10 条本机缓存</span></div>
+          <div class="legend"><span><i class="dot" style="background:var(--up)"></i>收涨</span><span><i class="dot" style="background:var(--down)"></i>收跌</span><span><i class="dot" style="background:var(--flat)"></i>平盘</span></div>
+          <div class="chart-wrap"><div class="y-axis" id="y-axis"></div><canvas class="plot" id="plot" aria-label="由本地样例日线生成的十根日K线"></canvas></div>
+          <div class="x-axis"><span>11月2日</span><span>11月7日</span><span>11月13日</span></div>
+          <p class="chart-caption">每根蜡烛对应一条未复权日线；最高 / 最低为影线，开盘 / 收盘为实体。</p>
+          <div class="divider"></div>
+          <div class="recent-title">最近记录</div>
+          <div id="rows"></div>
+          <div class="source">来源：Eastmoney fixture · 本机抓取时间：记录于项目样例元数据</div>
+        </section>
+        <div class="safe-area"></div>
+      </div>
+    </div>
+  </div>
+  <p class="footer">OHLC 取自项目已保存的 600000 日线 fixture（2026‑11‑02 至 2026‑11‑13）；报价取自对应的本地 quote fixture。仅用于静态界面预览，不是应用运行时画面，也未生成或补造 OHLC 数值。</p>
+</main>
+<script>
+// Exact daily OHLC values parsed from Resources/Fixtures/d6-eastmoney-daily-kline.raw.
+const bars = [
+ {d:'2026-11-02',o:9.98,c:10.06,h:10.22,l:9.93},
+ {d:'2026-11-03',o:10.06,c:10.09,h:10.18,l:9.85},
+ {d:'2026-11-04',o:10.05,c:10.09,h:10.23,l:10.05},
+ {d:'2026-11-05',o:10.09,c:9.87,h:10.10,l:9.82},
+ {d:'2026-11-06',o:9.91,c:10.03,h:10.07,l:9.84},
+ {d:'2026-11-09',o:9.94,c:10.10,h:10.15,l:9.94},
+ {d:'2026-11-10',o:10.06,c:10.20,h:10.24,l:10.00},
+ {d:'2026-11-11',o:10.22,c:10.17,h:10.31,l:10.15},
+ {d:'2026-11-12',o:10.14,c:10.21,h:10.24,l:10.03},
+ {d:'2026-11-13',o:10.19,c:10.40,h:10.44,l:10.12}
+];
+const canvas=document.getElementById('plot'), rect=canvas.getBoundingClientRect(), scale=2;
+canvas.width=rect.width*scale; canvas.height=rect.height*scale;
+const ctx=canvas.getContext('2d'); ctx.scale(scale,scale);
+const lo=Math.min(...bars.map(b=>b.l)), hi=Math.max(...bars.map(b=>b.h)), pad=Math.max((hi-lo)*.06,Math.abs(hi)*.002,.01);
+const min=lo-pad,max=hi+pad,range=max-min,H=rect.height,W=rect.width,topInset=7,bottomInset=7,ph=H-topInset-bottomInset;
+const money=v=>`¥${v.toFixed(2)}`;
+document.getElementById('y-axis').innerHTML=`<span>${money(max)}</span><span>${money((max+min)/2)}</span><span>${money(min)}</span>`;
+ctx.strokeStyle='rgba(158,173,188,.46)';ctx.lineWidth=1;
+[0,.5,1].forEach(f=>{const y=topInset+f*ph;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke()});
+const y=v=>topInset+(max-v)/range*ph,slot=W/bars.length,bw=Math.min(8,Math.max(1.5,slot*.58));
+bars.forEach((b,i)=>{const x=(i+.5)*slot,color=b.c>b.o?'#43D79A':b.c<b.o?'#FF7180':'#C0CBD5';ctx.strokeStyle=color;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x,y(b.h));ctx.lineTo(x,y(b.l));ctx.stroke();ctx.fillStyle=color;const t=Math.min(y(b.o),y(b.c)),bh=Math.max(Math.abs(y(b.c)-y(b.o)),1.5);ctx.fillRect(x-bw/2,t,bw,bh)});
+const price=v=>`¥${v.toFixed(2)}`;
+document.getElementById('rows').innerHTML=bars.slice(-4).reverse().map(b=>`<div class="row"><span class="date">${b.d.slice(5)}</span><span>开 ${price(b.o)}</span><span>高 ${price(b.h)}</span><span>低 ${price(b.l)}</span><span class="close">收 ${price(b.c)}</span></div>`).join('');
+</script>
+</body>
+</html>

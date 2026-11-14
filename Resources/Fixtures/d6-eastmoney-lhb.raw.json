@@ -1,0 +1,9 @@
+{
+  "source_url": "https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_DAILYBILLBOARD_DETAILSNEW&columns=ALL&filter=%28SECURITY_CODE%3D%22%5BREDACTED%5D%22%29&pageNumber=1&pageSize=1&sortTypes=-1&sortColumns=TRADE_DATE&source=WEB&client=WEB",
+  "http_status": 200,
+  "retrieval_timestamp": "2026-11-14T04:38:38Z",
+  "byte_count": 1292,
+  "sha256": "a775e5651e1e32f7269fff2194b6a96b511b6af6329ed0aea900258493ecf254",
+  "content_type": "text/plain;charset=UTF-8",
+  "capture_note": "Unmodified public response body; no cookies or authentication."
+}

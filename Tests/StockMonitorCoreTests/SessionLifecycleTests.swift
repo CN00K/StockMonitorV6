@@ -31,6 +31,9 @@ final class SessionLifecycleTests: XCTestCase {
         XCTAssertEqual(live.watchRules, [rule])
         XCTAssertEqual(live.holdings, [holding])
         XCTAssertEqual(live.latestSnapshot?.quotes.first?.sourceID, "fixture")
+        XCTAssertEqual(live.latestSnapshot?.limits["600000"], LimitPair(up: 10.78, down: 8.82))
+        XCTAssertTrue(live.limitPriceStatus.contains("本地估算"))
+        XCTAssertTrue(live.limitPriceStatus.contains("未提供 IPO 交易日序号"))
         XCTAssertEqual(live.reconcileReport?.barCount, 1)
         XCTAssertFalse(live.unreadSignals.isEmpty)
 
@@ -45,6 +48,29 @@ final class SessionLifecycleTests: XCTestCase {
         await engine.pollNow(now: now.addingTimeInterval(4))
         let after = await provider.count()
         XCTAssertEqual(before, after)
+    }
+
+    func testLiveEnginePersistsSessionTickAndProviderRequestCounts() async throws {
+        let now = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-11-16T10:00:00+08:00"))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SQLiteMonitorStore(databaseURL: directory.appendingPathComponent("Monitor.sqlite"), appGroupIdentifier: nil)
+        try await store.open()
+        try await store.setWatchCodes(["600000"])
+        let provider = CountingMarketProvider(timestamp: now)
+        let engine = LiveEngine(store: store, source: provider, limitSource: nil)
+        await engine.start(now: now)
+        var live = await engine.state(now: now)
+        for _ in 0..<100 {
+            if live.latestSnapshot != nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+            live = await engine.state(now: now)
+        }
+        XCTAssertNotNil(live.latestSnapshot)
+        await engine.stop(at: now.addingTimeInterval(60))
+        let usage = try await store.latestSessionUsage()
+        XCTAssertEqual(usage, MonitorSessionUsage(tickCount: 1, requestCount: 1))
     }
 
     func testSQLiteRestoresRulesHoldingsLatestQuotesAndMinuteCursorAndMarksSignalRead() async throws {

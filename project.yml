@@ -37,6 +37,12 @@ targets:
         buildPhase: resources
     dependencies:
       - target: StockMonitorCore
+    info:
+      properties:
+        CFBundleURLTypes:
+          - CFBundleURLName: com.cn00k.stockmonitorv6
+            CFBundleURLSchemes:
+              - stockmonitor
     settings:
       base:
         STOCKMONITOR_APP_BUNDLE_ID: com.cn00k.stockmonitorv6

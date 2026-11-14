@@ -10,11 +10,13 @@ public struct SinaQuoteSource: MarketQuoteSource, @unchecked Sendable {
     private let session: URLSession
     private let budget: RequestBudget
     private let batchSize: Int
+    private let responseCache: ConditionalHTTPResponseCache
 
-    public init(session: URLSession = .shared, budget: RequestBudget = .standard(), batchSize: Int = 50) {
+    public init(session: URLSession = .shared, budget: RequestBudget = .standard(), batchSize: Int = 50, responseCache: ConditionalHTTPResponseCache = .shared) {
         self.session = session
         self.budget = budget
         self.batchSize = min(50, max(1, batchSize))
+        self.responseCache = responseCache
     }
 
     public func fetchMarketData(codes: [String], indices: [MarketIndex]) async throws -> ProviderQuoteBatch {
@@ -37,17 +39,16 @@ public struct SinaQuoteSource: MarketQuoteSource, @unchecked Sendable {
             guard var components = URLComponents(string: "https://hq.sinajs.cn/list=\(symbols.joined(separator: ","))") else {
                 throw QuoteSourceError.invalidURL
             }
-            components.queryItems = [URLQueryItem(name: "rn", value: String(Int(Date().timeIntervalSince1970)))]
             guard let url = components.url else { throw QuoteSourceError.invalidURL }
             var request = URLRequest(url: url)
             request.timeoutInterval = 6
             request.setValue("https://finance.sina.com.cn/", forHTTPHeaderField: "Referer")
             request.setValue("text/plain,*/*", forHTTPHeaderField: "Accept")
+            request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
+            request.setValue("gzip, deflate", forHTTPHeaderField: "Accept-Encoding")
             let retrievedAt = Date()
-            let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                throw QuoteSourceError.httpStatus((response as? HTTPURLResponse)?.statusCode ?? -1)
-            }
+            let (data, response, _) = try await responseCache.fetch(request, using: session)
+            try QuoteSourceError.validateHTTPResponse(response, data: data)
             guard let text = QuoteTextDecoder.gbkOrUTF8(data) else {
                 throw QuoteSourceError.malformedResponse
             }
@@ -106,13 +107,31 @@ public struct SinaQuoteSource: MarketQuoteSource, @unchecked Sendable {
 public enum QuoteSourceError: Error, LocalizedError {
     case invalidURL
     case httpStatus(Int)
+    case responseFailure(statusCode: Int, kind: SourceFailureKind)
     case malformedResponse
+    case conditionalResponseWithoutCachedBody
+
+    static func validateHTTPResponse(_ response: URLResponse, data: Data, decodedText: String? = nil) throws {
+        guard let http = response as? HTTPURLResponse else { throw QuoteSourceError.malformedResponse }
+        var headers: [String: String] = [:]
+        for (key, value) in http.allHeaderFields {
+            if let key = key as? String, let value = value as? String { headers[key] = value }
+        }
+        let inspection = HTTPResponseInspector.inspect(statusCode: http.statusCode, headers: headers,
+            body: decodedText ?? String(data: data, encoding: .utf8))
+        guard inspection.isSuccess else {
+            throw QuoteSourceError.responseFailure(statusCode: http.statusCode,
+                kind: inspection.kind ?? .transient)
+        }
+    }
 
     public var errorDescription: String? {
         switch self {
         case .invalidURL: return "Invalid quote source URL"
         case .httpStatus(let status): return "Quote source returned HTTP \(status)"
+        case .responseFailure(let status, let kind): return "Quote source returned HTTP \(status) (\(kind.rawValue))"
         case .malformedResponse: return "Quote source returned an unrecognized payload"
+        case .conditionalResponseWithoutCachedBody: return "Quote source returned HTTP 304 without a cached response body"
         }
     }
 }

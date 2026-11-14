@@ -46,11 +46,12 @@ public struct EngineViewState: Sendable {
 /// All monitoring work is driven by a foreground session. The host must call
 /// `stop()` as soon as the scene enters the background.
 public actor LiveEngine {
-    public static let unknownLimitPriceNote = "每日涨跌停价未知：当前未配置可验证的逐股限价源；涨跌停规则不会触发。"
+    public static let unknownLimitPriceNote = "每日涨跌停价未知：没有可用的逐股限价计算结果。"
 
     private let store: any MonitorStore
     private let source: any MarketDataProviding
     private let historicalSource: (any HistoricalReconcileSource)?
+    private let limitSource: (any DailyLimitSource)?
     private let requestBudget: RequestBudget?
     private var rules: RuleEngine
     private var familyRules = RuleFamilyEngine()
@@ -63,6 +64,7 @@ public actor LiveEngine {
     private var unreadSignals: [AlertSignal] = []
     private var quoteSourceStatuses: [SourceStatus] = []
     private var historySourceStatus: SourceStatus?
+    private var currentLimitPriceStatus = LiveEngine.unknownLimitPriceNote
     private var reconcileReport: ReconcileReport?
     private var tickTask: Task<Void, Never>?
     private var activePollTask: Task<MarketDataBatch, Never>?
@@ -77,10 +79,24 @@ public actor LiveEngine {
 
     public init(store: any MonitorStore, source: any MarketDataProviding,
                 historicalSource: (any HistoricalReconcileSource)? = nil,
-                requestBudget: RequestBudget? = nil, rules: RuleEngine = RuleEngine()) {
+                requestBudget: RequestBudget? = nil, limitSource: (any DailyLimitSource)? = LocalDailyLimitSource(),
+                moneyFlowSource: (any MoneyFlowProviding)? = nil,
+                marketCoverageSource: (any MarketCoverageProviding)? = nil,
+                maximumFlowSymbols: Int = 50,
+                rules: RuleEngine = RuleEngine()) {
         self.store = store
-        self.source = source
+        var composedSource: any MarketDataProviding = source
+        if let moneyFlowSource {
+            composedSource = MoneyFlowAugmentingMarketDataProvider(quotes: composedSource,
+                moneyFlow: moneyFlowSource, maximumSymbols: maximumFlowSymbols)
+        }
+        if let marketCoverageSource {
+            composedSource = MarketCoverageAugmentingProvider(quotes: composedSource,
+                coverage: marketCoverageSource)
+        }
+        self.source = composedSource
         self.historicalSource = historicalSource
+        self.limitSource = limitSource
         self.requestBudget = requestBudget
         self.rules = rules
     }
@@ -119,10 +135,13 @@ public actor LiveEngine {
             let restoredCapture = (restored.latestQuotes + restored.latestIndexQuotes).map(\.retrievedAt).max()
             if restored.latestQuotes.isEmpty && restored.latestIndexQuotes.isEmpty {
                 latestSnapshot = nil
+                currentLimitPriceStatus = Self.unknownLimitPriceNote
             } else {
+                let (limits, limitStatus) = buildLimitContext(for: restored.latestQuotes)
+                currentLimitPriceStatus = limitStatus
                 latestSnapshot = MarketSnapshot(capturedAt: restoredCapture ?? now,
                     quotes: restored.latestQuotes, indexQuotes: restored.latestIndexQuotes,
-                    sourceStatuses: [], limitPriceStatus: Self.unknownLimitPriceNote)
+                    limits: limits, sourceStatuses: [], limitPriceStatus: limitStatus)
             }
 
             guard generation == lifecycleGeneration, !Task.isCancelled else { return }
@@ -245,7 +264,7 @@ public actor LiveEngine {
             watchCodes: watchCodes, watchRules: watchRules, ruleFamilySettings: familyRules.settings,
             holdings: holdings, latestSnapshot: latestSnapshot, unreadSignals: unreadSignals,
             sourceStatuses: allSourceStatuses, reconcileReport: reconcileReport,
-            limitPriceStatus: Self.unknownLimitPriceNote, lastError: lastError,
+            limitPriceStatus: currentLimitPriceStatus, lastError: lastError,
             isMarketSession: MarketClock.isTradingSession(now))
     }
 
@@ -264,16 +283,30 @@ public actor LiveEngine {
                 activePollRequestID = nil
             }
             guard phase == .live, generation == lifecycleGeneration, !Task.isCancelled else { return }
+            let requestCount = batch.sourceStatuses.reduce(0) { $0 + max(0, $1.requestCount) }
+            try? await store.recordSessionActivity(ticks: 1, requests: requestCount,
+                promptTokens: nil, completionTokens: nil, totalTokens: nil)
             quoteSourceStatuses = batch.sourceStatuses
             let statuses = allSourceStatuses
-            guard !batch.quotes.isEmpty || !batch.indexQuotes.isEmpty else {
+            let requestedSymbols = Array(Set(watchCodes + MarketIndex.core.map(\.code))).sorted()
+            let returnedSymbols = Array(Set((batch.quotes + batch.indexQuotes).map(\.code))).sorted()
+            let missingSymbols = Array(Set(batch.missingCodes + batch.missingIndexCodes +
+                requestedSymbols.filter { !returnedSymbols.contains($0) })).sorted()
+            let dataStatus: LiveTickDataStatus = returnedSymbols.isEmpty ? .empty :
+                (missingSymbols.isEmpty ? .complete : .partial)
+            try? await store.recordLiveTickStatus(LiveTickStatusRecord(recordedAt: now, operation: .tick,
+                dataStatus: dataStatus, requestedSymbols: requestedSymbols.count,
+                returnedSymbols: returnedSymbols.count, missingSymbols: missingSymbols))
+            guard !batch.quotes.isEmpty || !batch.indexQuotes.isEmpty || batch.marketCoverage != nil else {
                 if !batch.missingCodes.isEmpty || !batch.missingIndexCodes.isEmpty {
                     lastError = "No usable quote returned; missing \((batch.missingCodes + batch.missingIndexCodes).joined(separator: ", "))."
                 }
                 if let oldSnapshot = latestSnapshot {
                     latestSnapshot = MarketSnapshot(capturedAt: oldSnapshot.capturedAt,
                         quotes: oldSnapshot.quotes, indexQuotes: oldSnapshot.indexQuotes,
-                        sourceStatuses: statuses, limitPriceStatus: Self.unknownLimitPriceNote)
+                        limits: oldSnapshot.limits, sourceStatuses: statuses,
+                        limitPriceStatus: oldSnapshot.limitPriceStatus,
+                        marketCoverage: oldSnapshot.marketCoverage)
                 }
                 return
             }
@@ -284,9 +317,11 @@ public actor LiveEngine {
             let currentStocks = watchCodes.compactMap { stocksByCode[$0] }
             let currentIndices = MarketIndex.core.compactMap { indicesByCode[$0.code] }
             let previous = latestSnapshot
+            let (limits, limitStatus) = buildLimitContext(for: currentStocks)
+            currentLimitPriceStatus = limitStatus
             latestSnapshot = MarketSnapshot(capturedAt: now, quotes: currentStocks,
-                indexQuotes: currentIndices, limits: [:], sourceStatuses: statuses,
-                limitPriceStatus: Self.unknownLimitPriceNote)
+                indexQuotes: currentIndices, limits: limits, sourceStatuses: statuses,
+                limitPriceStatus: limitStatus, marketCoverage: batch.marketCoverage)
             for quote in batch.quotes {
                 let old = lastQuoteTimeByCode[quote.code] ?? .distantPast
                 if quote.timestamp > old { lastQuoteTimeByCode[quote.code] = quote.timestamp }
@@ -298,8 +333,9 @@ public actor LiveEngine {
             let strategyIndices = batch.indexQuotes.filter {
                 $0.timestampIsProvider && abs(now.timeIntervalSince($0.timestamp)) <= 120
             }
-            let evaluation = MarketSnapshot(capturedAt: now, quotes: strategyQuotes, indexQuotes: strategyIndices, limits: [:],
-                sourceStatuses: statuses, limitPriceStatus: Self.unknownLimitPriceNote)
+            let strategyLimits = limits.filter { key, _ in strategyQuotes.contains(where: { $0.code == key }) }
+            let evaluation = MarketSnapshot(capturedAt: now, quotes: strategyQuotes, indexQuotes: strategyIndices,
+                limits: strategyLimits, sourceStatuses: statuses, limitPriceStatus: limitStatus)
             let previousFamilyCheckpoint = familyRules.checkpoint
             let previousLegacyRules = rules
             let legacySignals = rules.evaluate(current: evaluation, previous: previous, now: now)
@@ -330,6 +366,23 @@ public actor LiveEngine {
         quoteSourceStatuses + (historySourceStatus.map { [$0] } ?? [])
     }
 
+    private func buildLimitContext(for quotes: [Quote]) -> ([String: LimitPair], String) {
+        guard let limitSource, !quotes.isEmpty else { return ([:], Self.unknownLimitPriceNote) }
+        var pairs: [String: LimitPair] = [:]
+        var unavailable: [String] = []
+        for quote in quotes where quote.kind == .stock {
+            let result = limitSource.limit(for: quote, listingSessionIndex: nil)
+            if result.availability == .computed, let pair = result.pair { pairs[quote.code] = pair }
+            else { unavailable.append(quote.code) }
+        }
+        guard !pairs.isEmpty else {
+            return ([:], "逐股限价不可用：\(Array(Set(unavailable)).sorted().joined(separator: ", "))。")
+        }
+        var status = "涨跌停价已按已核验板块比例本地估算 \(pairs.count)/\(quotes.count) 只（0.01元 tick，非权威行情源）。报价源未提供 IPO 交易日序号或退市整理首日状态；未识别为退市状态的证券按已进入常规交易阶段估算。"
+        if !unavailable.isEmpty { status += " 无法分类：\(Array(Set(unavailable)).sorted().joined(separator: ", "))。" }
+        return (pairs, status)
+    }
+
     private func beginReconciliation(source: any HistoricalReconcileSource,
                                      codes: [String], afterByCode: [String: Date],
                                      generation: Int, evaluationDate: Date) {
@@ -349,6 +402,8 @@ public actor LiveEngine {
                                       requestID: UUID, generation: Int, evaluationDate: Date) async {
         guard generation == lifecycleGeneration, phase == .live,
               activeReconcileRequestID == requestID, !Task.isCancelled else { return }
+        try? await store.recordSessionActivity(ticks: 0, requests: max(0, result.status.requestCount),
+            promptTokens: nil, completionTokens: nil, totalTokens: nil)
         historySourceStatus = result.status
         reconcileReport = result.report
         let previousCheckpoint = familyRules.checkpoint
@@ -356,6 +411,11 @@ public actor LiveEngine {
         do {
             try await store.commitReconciliation(bars: result.bars, signals: recoveredSignals,
                 ruleCheckpoint: familyRules.checkpoint)
+            try? await store.recordLiveTickStatus(LiveTickStatusRecord(recordedAt: evaluationDate,
+                operation: .reconcile, dataStatus: result.bars.isEmpty ? .empty : .complete,
+                requestedSymbols: result.report.requestedCodes.count,
+                returnedSymbols: result.report.reconciledCodes.count,
+                missingSymbols: result.report.skippedCodes, reconcileOutcome: .success))
             guard generation == lifecycleGeneration, phase == .live,
                   activeReconcileRequestID == requestID, !Task.isCancelled else { return }
             if !recoveredSignals.isEmpty {
@@ -364,6 +424,11 @@ public actor LiveEngine {
             }
         } catch {
             familyRules.restoreCheckpoint(previousCheckpoint)
+            try? await store.recordLiveTickStatus(LiveTickStatusRecord(recordedAt: evaluationDate,
+                operation: .reconcile, dataStatus: result.bars.isEmpty ? .empty : .partial,
+                requestedSymbols: result.report.requestedCodes.count,
+                returnedSymbols: result.report.reconciledCodes.count,
+                missingSymbols: result.report.skippedCodes, reconcileOutcome: .failure))
             if generation == lifecycleGeneration { lastError = error.localizedDescription }
         }
         if activeReconcileRequestID == requestID {

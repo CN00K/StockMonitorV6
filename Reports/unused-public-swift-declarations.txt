@@ -1,0 +1,56 @@
+UNUSED PUBLIC SWIFT DECLARATIONS — CANDIDATES ONLY
+This deterministic heuristic report is not proof of dead code.
+
+Swift files scanned: 81
+Public declarations scanned: 1873
+Candidates: 45
+
+Candidates:
+- Sources/StockMonitorCore/ConditionalHTTPResponseCache.swift:64 public func entryCount
+- Sources/StockMonitorCore/ConditionalHTTPResponseCache.swift:65 public func storedByteCount
+- Sources/StockMonitorCore/Diagnostics.swift:174 public struct NoopDiagnosticLogger
+- Sources/StockMonitorCore/Diagnostics.swift:182 public struct OSLogDiagnosticLogger
+- Sources/StockMonitorCore/Diagnostics.swift:200 public enum DiagnosticBundleExporter
+- Sources/StockMonitorCore/EastmoneyFundamentalsSource.swift:96 public func fetchFundamentals
+- Sources/StockMonitorCore/EventCollector.swift:124 public func exportFile
+- Sources/StockMonitorCore/EventProcessing.swift:166 public var filterFiltered
+- Sources/StockMonitorCore/FactorSubset.swift:199 public enum FactorNormalization
+- Sources/StockMonitorCore/FactorSubset.swift:201 public func winsorizeMAD
+- Sources/StockMonitorCore/FactorSubset.swift:213 public func standardizeZScore
+- Sources/StockMonitorCore/FactorSubset.swift:227 public func neutralizeByGroup
+- Sources/StockMonitorCore/Indicators.swift:33 public struct ATRValue
+- Sources/StockMonitorCore/Indicators.swift:177 public func bollingerBands
+- Sources/StockMonitorCore/LiveEngine.swift:245 public func saveDailyBars
+- Sources/StockMonitorCore/MarketClock.swift:133 public var verifiedCalendarYears
+- Sources/StockMonitorCore/MarketClock.swift:137 public var calendarYearsWithEntries
+- Sources/StockMonitorCore/MarketCoverageSources.swift:469 public struct EastmoneyLimitUpPoolSource
+- Sources/StockMonitorCore/MarketDataSources.swift:254 public enum QuoteRegistryError
+- Sources/StockMonitorCore/MarketVenueMetadata.swift:119 public enum MarketVenueCatalog
+- Sources/StockMonitorCore/MarketVenueMetadata.swift:148 public func sessionStatus
+- Sources/StockMonitorCore/MarketVenueMetadata.swift:162 public func localComponents
+- Sources/StockMonitorCore/MinuteIndicators.swift:138 public func vwapBands
+- Sources/StockMonitorCore/PortableBackupCodec.swift:24 public var positions
+- Sources/StockMonitorCore/PortableBackupCodec.swift:174 public struct PortableBackupCodec
+- Sources/StockMonitorCore/SQLiteMonitorStore.swift:975 public func analystUsage
+- Sources/StockMonitorCore/SimHash.swift:42 public func isDuplicate
+- Sources/StockMonitorCore/SourceFailurePolicy.swift:47 public var canProceed
+- Sources/StockMonitorCore/SourceFailurePolicy.swift:48 public var shouldRetry
+- Sources/StockMonitorCore/SourceFailurePolicy.swift:180 public func allow
+- Sources/StockMonitorCore/SourceFailurePolicy.swift:181 public func shouldAllow
+- Sources/StockMonitorCore/SourceFailurePolicy.swift:222 public func reset
+- Sources/StockMonitorCore/StockMonitorFunctionalRuntime.swift:223 public func currentState
+- Sources/StockMonitorCore/StockMonitorFunctionalRuntime.swift:257 public func buildEventReport
+- Sources/StockMonitorCore/StockMonitorFunctionalRuntime.swift:265 public func exportReportPDF
+- Sources/StockMonitorCore/StockMonitorFunctionalRuntime.swift:287 public func refreshFundamentals
+- Sources/StockMonitorCore/StockMonitorFunctionalRuntime.swift:296 public func latestFundamentalObservations
+- Sources/StockMonitorCore/StockMonitorFunctionalRuntime.swift:302 public func refreshDailyHistory
+- Sources/StockMonitorCore/StockMonitorFunctionalRuntime.swift:342 public func exportEncryptedBackup
+- Sources/StockMonitorCore/StockMonitorFunctionalRuntime.swift:346 public func restoreEncryptedBackup
+- Sources/StockMonitorCore/StockMonitorFunctionalRuntime.swift:351 public func deliverUnreadAlerts
+- Sources/StockMonitorCore/StockMonitorFunctionalRuntime.swift:359 public func applyAlertAction
+- Sources/StockMonitorCore/StockMonitorFunctionalRuntime.swift:373 public func requestNotificationAuthorization
+- Sources/StockMonitorCore/VisualizationMapping.swift:18 public func treemapAreaShares
+- Sources/StockMonitorCore/VisualizationMapping.swift:77 public func largestTriangleThreeBuckets
+
+Review candidates manually; external clients, dynamic dispatch, reflection,
+generated entry points, and runtime/linker use are not observable by this scan.

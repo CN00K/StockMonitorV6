@@ -16,6 +16,16 @@ public struct Quote: Codable, Sendable, Equatable, Identifiable {
     public let low: Double
     public let volume: Int64
     public let amount: Double?
+    public let turnoverRate: Double?
+    public let volumeRatio: Double?
+    public let dynamicPE: Double?
+    public let totalMarketValue: Double?
+    public let floatMarketValue: Double?
+    public let mainNetInflow: Double?
+    public let largeNetInflow: Double?
+    public let superLargeNetInflow: Double?
+    public let moneyFlowTimestamp: Date?
+    public let moneyFlowSourceID: String?
     public let sourceID: String
     public let retrievedAt: Date
     public let timestampIsProvider: Bool
@@ -29,7 +39,12 @@ public struct Quote: Codable, Sendable, Equatable, Identifiable {
 
     public init(code: String, name: String, timestamp: Date, price: Double,
                 previousClose: Double, open: Double, high: Double, low: Double,
-                volume: Int64, amount: Double? = nil, sourceID: String = "manual",
+                volume: Int64, amount: Double? = nil, turnoverRate: Double? = nil,
+                volumeRatio: Double? = nil, dynamicPE: Double? = nil,
+                totalMarketValue: Double? = nil, floatMarketValue: Double? = nil,
+                mainNetInflow: Double? = nil, largeNetInflow: Double? = nil,
+                superLargeNetInflow: Double? = nil, moneyFlowTimestamp: Date? = nil,
+                moneyFlowSourceID: String? = nil, sourceID: String = "manual",
                 retrievedAt: Date = Date(), timestampIsProvider: Bool = true,
                 kind: QuoteKind = .stock) {
         self.code = code
@@ -42,6 +57,16 @@ public struct Quote: Codable, Sendable, Equatable, Identifiable {
         self.low = low
         self.volume = volume
         self.amount = amount
+        self.turnoverRate = turnoverRate
+        self.volumeRatio = volumeRatio
+        self.dynamicPE = dynamicPE
+        self.totalMarketValue = totalMarketValue
+        self.floatMarketValue = floatMarketValue
+        self.mainNetInflow = mainNetInflow
+        self.largeNetInflow = largeNetInflow
+        self.superLargeNetInflow = superLargeNetInflow
+        self.moneyFlowTimestamp = moneyFlowTimestamp
+        self.moneyFlowSourceID = moneyFlowSourceID
         self.sourceID = sourceID
         self.retrievedAt = retrievedAt
         self.timestampIsProvider = timestampIsProvider
@@ -50,6 +75,8 @@ public struct Quote: Codable, Sendable, Equatable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case code, name, timestamp, price, previousClose, open, high, low, volume, amount
+        case turnoverRate, volumeRatio, dynamicPE, totalMarketValue, floatMarketValue
+        case mainNetInflow, largeNetInflow, superLargeNetInflow, moneyFlowTimestamp, moneyFlowSourceID
         case sourceID, retrievedAt, timestampIsProvider, kind
     }
 
@@ -65,6 +92,16 @@ public struct Quote: Codable, Sendable, Equatable, Identifiable {
         low = try values.decode(Double.self, forKey: .low)
         volume = try values.decode(Int64.self, forKey: .volume)
         amount = try values.decodeIfPresent(Double.self, forKey: .amount)
+        turnoverRate = try values.decodeIfPresent(Double.self, forKey: .turnoverRate)
+        volumeRatio = try values.decodeIfPresent(Double.self, forKey: .volumeRatio)
+        dynamicPE = try values.decodeIfPresent(Double.self, forKey: .dynamicPE)
+        totalMarketValue = try values.decodeIfPresent(Double.self, forKey: .totalMarketValue)
+        floatMarketValue = try values.decodeIfPresent(Double.self, forKey: .floatMarketValue)
+        mainNetInflow = try values.decodeIfPresent(Double.self, forKey: .mainNetInflow)
+        largeNetInflow = try values.decodeIfPresent(Double.self, forKey: .largeNetInflow)
+        superLargeNetInflow = try values.decodeIfPresent(Double.self, forKey: .superLargeNetInflow)
+        moneyFlowTimestamp = try values.decodeIfPresent(Date.self, forKey: .moneyFlowTimestamp)
+        moneyFlowSourceID = try values.decodeIfPresent(String.self, forKey: .moneyFlowSourceID)
         sourceID = try values.decodeIfPresent(String.self, forKey: .sourceID) ?? "unknown"
         retrievedAt = try values.decodeIfPresent(Date.self, forKey: .retrievedAt) ?? timestamp
         timestampIsProvider = try values.decodeIfPresent(Bool.self, forKey: .timestampIsProvider) ?? true
@@ -89,16 +126,19 @@ public struct MarketSnapshot: Codable, Sendable, Equatable {
     public let limits: [String: LimitPair]
     public let sourceStatuses: [SourceStatus]
     public let limitPriceStatus: String
+    public let marketCoverage: MarketCoverageSnapshot?
 
     public init(capturedAt: Date = Date(), quotes: [Quote], indexQuotes: [Quote] = [],
                 limits: [String: LimitPair] = [:], sourceStatuses: [SourceStatus] = [],
-                limitPriceStatus: String = "Daily limit-price source unavailable") {
+                limitPriceStatus: String = "Daily limit-price source unavailable",
+                marketCoverage: MarketCoverageSnapshot? = nil) {
         self.capturedAt = capturedAt
         self.quotes = quotes
         self.indexQuotes = indexQuotes
         self.limits = limits
         self.sourceStatuses = sourceStatuses
         self.limitPriceStatus = limitPriceStatus
+        self.marketCoverage = marketCoverage
     }
 }
 

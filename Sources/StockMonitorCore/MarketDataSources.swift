@@ -77,14 +77,19 @@ public struct MarketDataBatch: Sendable {
     public let sourceStatuses: [SourceStatus]
     public let missingCodes: [String]
     public let missingIndexCodes: [String]
+    public let suspectCodes: [String]
+    public let marketCoverage: MarketCoverageSnapshot?
 
     public init(quotes: [Quote], indexQuotes: [Quote], sourceStatuses: [SourceStatus],
-                missingCodes: [String] = [], missingIndexCodes: [String] = []) {
+                missingCodes: [String] = [], missingIndexCodes: [String] = [],
+                suspectCodes: [String] = [], marketCoverage: MarketCoverageSnapshot? = nil) {
         self.quotes = quotes
         self.indexQuotes = indexQuotes
         self.sourceStatuses = sourceStatuses
         self.missingCodes = missingCodes
         self.missingIndexCodes = missingIndexCodes
+        self.suspectCodes = suspectCodes.sorted()
+        self.marketCoverage = marketCoverage
     }
 }
 
@@ -256,11 +261,33 @@ public enum QuoteRegistryError: Error, LocalizedError {
     }
 }
 
-/// Sequential failover; successful values are never silently overwritten by a later source.
+/// A-share quote sanity gate. Recent listings must be explicitly exempted because
+/// first-session prices can legitimately move beyond the ordinary-stock threshold.
+public enum QuoteQualityGate {
+    public static let maximumAbsoluteChange = 0.22
+
+    public static func isSuspect(_ quote: Quote, newListingCodes: Set<String> = []) -> Bool {
+        guard quote.kind == .stock, !newListingCodes.contains(quote.code),
+              quote.price.isFinite, quote.price > 0,
+              quote.previousClose.isFinite, quote.previousClose > 0 else { return false }
+        return abs(quote.price / quote.previousClose - 1) > maximumAbsoluteChange
+    }
+}
+
+/// Sequential failover with bounded recovery probes; successful values are never
+/// silently overwritten by a later source. The user must supply known IPO codes to
+/// exempt them from the conservative 22% sanity gate.
 public struct QuoteSourceRegistry: Sendable {
     private let sources: [any MarketQuoteSource]
+    private let failurePolicy: SourceFailurePolicy
+    private let newListingCodes: Set<String>
 
-    public init(sources: [any MarketQuoteSource]) { self.sources = sources }
+    public init(sources: [any MarketQuoteSource], failurePolicy: SourceFailurePolicy = SourceFailurePolicy(),
+                newListingCodes: Set<String> = []) {
+        self.sources = sources
+        self.failurePolicy = failurePolicy
+        self.newListingCodes = newListingCodes
+    }
 
     public func fetch(codes: [String], indices: [MarketIndex] = []) async -> MarketDataBatch {
         let requestedCodes = Array(Set(codes)).sorted()
@@ -268,26 +295,55 @@ public struct QuoteSourceRegistry: Sendable {
         var stockByCode: [String: Quote] = [:]
         var indexByCode: [String: Quote] = [:]
         var statuses: [SourceStatus] = []
+        var suspectCodes = Set<String>()
 
         for source in sources {
             if Task.isCancelled { break }
             let missingCodes = requestedCodes.filter { stockByCode[$0] == nil }
             let missingIndices = indices.filter { indexByCode[$0.code] == nil }
             if missingCodes.isEmpty && missingIndices.isEmpty { break }
+            let gate = await failurePolicy.decision(for: source.identifier)
+            guard gate.allowed else {
+                statuses.append(SourceStatus(sourceID: source.identifier, fetchedAt: Date(),
+                    requestedCount: missingCodes.count + missingIndices.count, returnedCount: 0,
+                    requestCount: 0, note: "Source skipped by failure gate (\(gate.state.rawValue)); retryAt=\(gate.retryAt.map { ISO8601DateFormatter().string(from: $0) } ?? "unknown")."))
+                continue
+            }
             do {
                 let batch = try await source.fetchMarketData(codes: missingCodes, indices: missingIndices)
-                statuses.append(batch.status)
-                for quote in batch.quotes where quote.kind == .stock && missingCodes.contains(quote.code) && quote.price.isFinite && quote.price >= 0 {
+                let suspectInBatch = batch.quotes.filter { QuoteQualityGate.isSuspect($0, newListingCodes: newListingCodes) }
+                let suspectSet = Set(suspectInBatch.map(\.code))
+                suspectCodes.formUnion(suspectSet)
+                let candidateStocks = batch.quotes.filter { !suspectSet.contains($0.code) }
+                let usableCount = candidateStocks.filter { $0.kind == .stock && missingCodes.contains($0.code) && $0.price.isFinite && $0.price > 0 }.count
+                    + batch.indexQuotes.filter { quote in
+                        quote.kind == .index && missingIndices.contains(where: { $0.code == quote.code }) && quote.price.isFinite && quote.price > 0
+                    }.count
+                if let error = batch.status.error {
+                    _ = await failurePolicy.recordFailure(sourceID: source.identifier, kind: Self.failureKind(for: error))
+                } else if usableCount == 0 && (!missingCodes.isEmpty || !missingIndices.isEmpty) {
+                    _ = await failurePolicy.recordFailure(sourceID: source.identifier, kind: .malformedResponse)
+                } else {
+                    await failurePolicy.recordSuccess(sourceID: source.identifier)
+                }
+                let note = [batch.status.note, suspectSet.isEmpty ? nil : "Rejected suspect (>22% vs previous close) stock quotes: \(suspectSet.sorted().joined(separator: ", "))."].compactMap { $0 }.joined(separator: " ")
+                statuses.append(SourceStatus(sourceID: batch.status.sourceID, fetchedAt: batch.status.fetchedAt,
+                    providerTimestamp: batch.status.providerTimestamp, requestedCount: batch.status.requestedCount,
+                    returnedCount: batch.status.returnedCount, requestCount: batch.status.requestCount,
+                    error: batch.status.error, note: note.isEmpty ? nil : note))
+                for quote in candidateStocks where quote.kind == .stock && missingCodes.contains(quote.code) && quote.price.isFinite && quote.price > 0 {
                     stockByCode[quote.code] = quote
                 }
-                for quote in batch.indexQuotes where quote.kind == .index && missingIndices.contains(where: { $0.code == quote.code }) && quote.price.isFinite && quote.price >= 0 {
+                for quote in batch.indexQuotes where quote.kind == .index && missingIndices.contains(where: { $0.code == quote.code }) && quote.price.isFinite && quote.price > 0 {
                     indexByCode[quote.code] = quote
                 }
             } catch {
+                let kind = Self.failureKind(for: error)
+                let decision = await failurePolicy.recordFailure(sourceID: source.identifier, kind: kind)
                 statuses.append(SourceStatus(sourceID: source.identifier, fetchedAt: Date(),
                     requestedCount: missingCodes.count + missingIndices.count, returnedCount: 0,
-                    requestCount: 1, error: error.localizedDescription,
-                    note: "Provider request failed; earlier batches may not be counted; trying next configured source"))
+                    requestCount: 1, error: DiagnosticRedactor.redact(error.localizedDescription),
+                    note: "Provider request failed (\(kind.rawValue)); gate=\(decision.state.rawValue), retryAt=\(decision.retryAt.map { ISO8601DateFormatter().string(from: $0) } ?? "none"); trying next configured source"))
                 if Task.isCancelled { break }
             }
         }
@@ -295,7 +351,39 @@ public struct QuoteSourceRegistry: Sendable {
         let missingIndices = requestedIndexCodes.filter { indexByCode[$0] == nil }.sorted()
         return MarketDataBatch(quotes: requestedCodes.compactMap { stockByCode[$0] },
             indexQuotes: indices.compactMap { indexByCode[$0.code] }, sourceStatuses: statuses,
-            missingCodes: missing, missingIndexCodes: missingIndices)
+            missingCodes: missing, missingIndexCodes: missingIndices, suspectCodes: Array(suspectCodes))
+    }
+
+    private static func failureKind(for error: Error) -> SourceFailureKind {
+        if let error = error as? QuoteSourceError {
+            switch error {
+            case .invalidURL: return .permanent
+            case .malformedResponse: return .malformedResponse
+            case .responseFailure(_, let kind): return kind
+            case .conditionalResponseWithoutCachedBody: return .transient
+            case .httpStatus(let code):
+                if code == 429 { return .rateLimited }
+                if code == 403 { return .forbidden }
+                if (500...599).contains(code) { return .transient }
+                if (400...499).contains(code) { return .permanent }
+                return .transient
+            }
+        }
+        return failureKind(for: error.localizedDescription)
+    }
+
+    private static func failureKind(for text: String) -> SourceFailureKind {
+        if let range = text.range(of: #"HTTP\s+(\d{3})"#, options: .regularExpression),
+           let code = Int(text[range].split(whereSeparator: \.isWhitespace).last ?? "") {
+            if code == 429 { return .rateLimited }
+            if code == 403 { return .forbidden }
+            if (500...599).contains(code) { return .transient }
+            if (400...499).contains(code) { return .permanent }
+        }
+        if text.contains("429") { return .rateLimited }
+        if text.contains("403") { return .forbidden }
+        if text.localizedCaseInsensitiveContains("malformed") || text.localizedCaseInsensitiveContains("unrecognized payload") { return .malformedResponse }
+        return .transient
     }
 }
 

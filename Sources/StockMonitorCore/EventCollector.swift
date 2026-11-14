@@ -25,13 +25,16 @@ public actor EventCollector {
     private let store: any MonitorStore
     private let sources: [any MarketEventSource]
     private let processor: EventProcessor
+    private let enricher: EventLLMEnricher?
     private let maximumPerSource: Int
 
     public init(store: any MonitorStore, sources: [any MarketEventSource],
-                processor: EventProcessor, maximumPerSource: Int = 30) {
+                processor: EventProcessor, maximumPerSource: Int = 30,
+                enricher: EventLLMEnricher? = nil) {
         self.store = store
         self.sources = sources
         self.processor = processor
+        self.enricher = enricher
         self.maximumPerSource = max(1, min(100, maximumPerSource))
     }
 
@@ -56,7 +59,29 @@ public actor EventCollector {
             return EventCollectionReport(sourceStatuses: statuses, receivedCount: received.count, storedCount: 0,
                 storageError: "Refresh was cancelled before the local commit.")
         }
-        let visible = processor.process(received)
+        let enrichment: EventLLMEnrichmentBatch
+        do {
+            if let enricher {
+                enrichment = try await enricher.enrichWithUsage(received)
+            } else {
+                enrichment = EventLLMEnrichmentBatch(events: received, usage: AnalystUsageLedger(requestCount: 0))
+            }
+        } catch is CancellationError {
+            return EventCollectionReport(sourceStatuses: statuses, receivedCount: received.count, storedCount: 0,
+                storageError: "Refresh was cancelled before the local commit.")
+        } catch {
+            enrichment = EventLLMEnrichmentBatch(events: received, usage: AnalystUsageLedger(requestCount: 0))
+        }
+        let enriched = enrichment.events
+        let sourceRequestCount = statuses.reduce(0) { $0 + max(0, $1.requestCount) }
+        let llmUsage = enrichment.usage
+        try? await store.recordSessionActivity(ticks: 0,
+            requests: sourceRequestCount + llmUsage.requestCount,
+            promptTokens: llmUsage.promptTokenCount,
+            completionTokens: llmUsage.completionTokenCount,
+            totalTokens: llmUsage.totalTokenCount)
+        let processed = processor.processWithMetrics(enriched)
+        let visible = processed.events
         let p1Statuses = statuses.filter { ["gov", "cninfo"].contains($0.sourceID.lowercased()) }
         let healthDay = Self.chinaCalendar().startOfDay(for: Date())
         let health = SourceHealthDelta(day: healthDay,
@@ -66,11 +91,12 @@ public actor EventCollector {
             filterTotal: statuses.reduce(0) { $0 + $1.candidateRecordCount },
             ruleOrSkippedDecisions: visible.count)
         do {
-            try await store.upsertEvents(received)
+            try await store.upsertEvents(enriched)
+            try await store.recordEventRejections(processed.rejections)
             _ = try await store.archiveRawResponses(rawResponses)
             try await store.recordSourceHealth(health)
             return EventCollectionReport(sourceStatuses: statuses, receivedCount: received.count,
-                storedCount: received.count, visibleCount: visible.count, visibleEvents: visible)
+                storedCount: enriched.count, visibleCount: visible.count, visibleEvents: visible)
         } catch {
             return EventCollectionReport(sourceStatuses: statuses, receivedCount: received.count,
                 storedCount: 0, visibleCount: visible.count, visibleEvents: visible,

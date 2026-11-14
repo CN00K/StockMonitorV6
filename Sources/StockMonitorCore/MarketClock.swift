@@ -6,8 +6,71 @@ public enum TradingDayStatus: Sendable, Equatable {
     case unknown
 }
 
+public struct OfficialHolidayClosure: Codable, Equatable, Sendable {
+    public let date: String
+    public let name: String
+
+    public init(date: String, name: String) {
+        self.date = date
+        self.name = name
+    }
+}
+
+public struct OfficialHolidayCalendarPayload: Codable, Equatable, Sendable {
+    public let version: Int
+    public let sourceTitle: String
+    public let sourceURL: String
+    public let retrievedOn: String
+    public let calendarYear: Int
+    public let closedDates: [OfficialHolidayClosure]
+
+    public init(version: Int = 1, sourceTitle: String, sourceURL: String,
+                retrievedOn: String, calendarYear: Int,
+                closedDates: [OfficialHolidayClosure]) {
+        self.version = version
+        self.sourceTitle = sourceTitle
+        self.sourceURL = sourceURL
+        self.retrievedOn = retrievedOn
+        self.calendarYear = calendarYear
+        self.closedDates = closedDates
+    }
+}
+
+public enum OfficialHolidayImportError: Error, Equatable, Sendable {
+    case malformedPayload
+    case unsupportedVersion(Int)
+    case invalidProvenance(String)
+    case invalidCalendarYear(Int)
+    case invalidClosedDate(String)
+    case duplicateClosedDate(String)
+    case emptyClosedDates
+    case storageLimitExceeded
+}
+
+extension OfficialHolidayImportError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .malformedPayload: return "交易日历 JSON 格式无效。"
+        case .unsupportedVersion(let version): return "不支持交易日历格式版本 \(version)。"
+        case .invalidProvenance(let reason): return "来源信息不接受：\(reason)"
+        case .invalidCalendarYear(let year): return "日历年份无效：\(year)。"
+        case .invalidClosedDate(let date): return "闭市日期无效：\(date)。"
+        case .duplicateClosedDate(let date): return "闭市日期重复：\(date)。"
+        case .emptyClosedDates: return "日历没有明示闭市日期。"
+        case .storageLimitExceeded: return "交易日历文件或本机保存数据超过大小/数量上限。"
+        }
+    }
+}
+
 public enum MarketClock {
     public static let timeZone = TimeZone(identifier: "Asia/Shanghai")!
+    private static let importedCalendarLock = NSLock()
+    private static let importedCalendarPreferencesKey = "stockmonitor.officialHolidayCalendars.v1"
+    private static let maximumImportedCalendarBytes = 1_048_576
+    private static let maximumImportedCalendarRecords = 100
+    private static var importedCalendarPayloads: [OfficialHolidayCalendarPayload] = []
+    private static var importedCalendarsLoaded = false
+    private static var importedHolidayClosures: [Int: [String: String]] = [:]
 
     /// Each listed year's closures come from its opened official SSE annual notice.
     /// Direct SZSE cross-check coverage is recorded in SOURCE_EVIDENCE.md. Unlisted
@@ -67,18 +130,146 @@ public enum MarketClock {
         ]
     ]
 
-    public static var verifiedCalendarYears: [Int] { officialHolidayClosures.keys.sorted() }
+    public static var verifiedCalendarYears: [Int] {
+        officialHolidayClosures.keys.sorted()
+    }
+
+    public static var calendarYearsWithEntries: [Int] {
+        ensureImportedCalendarsLoaded()
+        importedCalendarLock.lock()
+        defer { importedCalendarLock.unlock() }
+        return Set(officialHolidayClosures.keys).union(importedHolidayClosures.keys).sorted()
+    }
+
+    /// Validates and atomically merges a locally supplied official holiday record.
+    /// Existing verified dates win over imported values. Imported years recognize
+    /// only explicitly listed closed dates; absent dates remain unknown.
+    @discardableResult
+    public static func updateOfficialHolidayCalendar(with payload: OfficialHolidayCalendarPayload) throws -> OfficialHolidayCalendarPayload {
+        try validate(payload)
+        ensureImportedCalendarsLoaded()
+        importedCalendarLock.lock()
+        defer { importedCalendarLock.unlock() }
+        let nextPayloads = importedCalendarPayloads.contains(payload)
+            ? importedCalendarPayloads
+            : importedCalendarPayloads + [payload]
+        guard nextPayloads.count <= maximumImportedCalendarRecords else {
+            throw OfficialHolidayImportError.storageLimitExceeded
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let encodedPayloads = try encoder.encode(nextPayloads)
+        guard encodedPayloads.count <= maximumImportedCalendarBytes else {
+            throw OfficialHolidayImportError.storageLimitExceeded
+        }
+        var dates = importedHolidayClosures[payload.calendarYear, default: [:]]
+        let verifiedDates = officialHolidayClosures[payload.calendarYear] ?? [:]
+        for closure in payload.closedDates where verifiedDates[closure.date] == nil {
+            dates[closure.date] = dates[closure.date] ?? closure.name
+        }
+        UserDefaults.standard.set(encodedPayloads, forKey: importedCalendarPreferencesKey)
+        importedCalendarPayloads = nextPayloads
+        importedHolidayClosures[payload.calendarYear] = dates
+        return payload
+    }
+
+    /// Decodes and validates caller-supplied UTF-8 JSON. No URL or other network
+    /// request is followed.
+    @discardableResult
+    public static func importOfficialHolidayCalendar(from data: Data) throws -> OfficialHolidayCalendarPayload {
+        guard data.count <= maximumImportedCalendarBytes else {
+            throw OfficialHolidayImportError.storageLimitExceeded
+        }
+        guard let payload = try? JSONDecoder().decode(OfficialHolidayCalendarPayload.self, from: data) else {
+            throw OfficialHolidayImportError.malformedPayload
+        }
+        return try updateOfficialHolidayCalendar(with: payload)
+    }
+
+    #if DEBUG
+    internal static func resetImportedHolidayCalendarsForTesting() {
+        importedCalendarLock.lock()
+        UserDefaults.standard.removeObject(forKey: importedCalendarPreferencesKey)
+        importedCalendarPayloads.removeAll()
+        importedCalendarsLoaded = true
+        importedHolidayClosures.removeAll()
+        importedCalendarLock.unlock()
+    }
+
+    internal static func reloadImportedHolidayCalendarsForTesting() {
+        importedCalendarLock.lock()
+        importedCalendarPayloads.removeAll()
+        importedCalendarsLoaded = false
+        importedHolidayClosures.removeAll()
+        importedCalendarLock.unlock()
+        ensureImportedCalendarsLoaded()
+    }
+    #endif
+
+    private static func validate(_ payload: OfficialHolidayCalendarPayload) throws {
+        guard payload.version == 1 else { throw OfficialHolidayImportError.unsupportedVersion(payload.version) }
+        guard !payload.sourceTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              payload.sourceTitle.count <= 200,
+              let url = URL(string: payload.sourceURL),
+              url.scheme?.lowercased() == "https",
+              url.port == nil || url.port == 443,
+              let rawHost = url.host?.lowercased(), !rawHost.isEmpty,
+              url.user == nil, url.password == nil, url.fragment == nil,
+              isApprovedExchangeHost(rawHost),
+              !payload.sourceURL.contains(where: { $0.isWhitespace }) else {
+            throw OfficialHolidayImportError.invalidProvenance("source must be an HTTPS SSE/SZSE/BSE URL without credentials or fragments")
+        }
+        guard isValidISODate(payload.retrievedOn) else {
+            throw OfficialHolidayImportError.invalidProvenance("retrievedOn")
+        }
+        guard (2000...2100).contains(payload.calendarYear) else {
+            throw OfficialHolidayImportError.invalidCalendarYear(payload.calendarYear)
+        }
+        guard !payload.closedDates.isEmpty else { throw OfficialHolidayImportError.emptyClosedDates }
+        guard payload.closedDates.count <= 366 else { throw OfficialHolidayImportError.storageLimitExceeded }
+
+        var seen = Set<String>()
+        for closure in payload.closedDates {
+            guard isValidISODate(closure.date),
+                  Int(closure.date.prefix(4)) == payload.calendarYear,
+                  !closure.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  closure.name.count <= 80 else {
+                throw OfficialHolidayImportError.invalidClosedDate(closure.date)
+            }
+            guard seen.insert(closure.date).inserted else {
+                throw OfficialHolidayImportError.duplicateClosedDate(closure.date)
+            }
+        }
+    }
+
+    private static func isValidISODate(_ value: String) -> Bool {
+        guard value.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil else { return false }
+        let parts = value.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return false }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        guard let date = calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2])) else { return false }
+        let components = calendar.dateComponents([.year, .month, .day], from: date)
+        return components.year == parts[0] && components.month == parts[1] && components.day == parts[2]
+    }
 
     public static func tradingDayStatus(_ date: Date = Date(), calendar input: Calendar? = nil) -> TradingDayStatus {
+        ensureImportedCalendarsLoaded()
         var calendar = input ?? Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone
         let parts = calendar.dateComponents([.year, .month, .day, .weekday], from: date)
         guard let year = parts.year, let month = parts.month, let day = parts.day,
               let weekday = parts.weekday else { return .unknown }
         guard weekday != 1, weekday != 7 else { return .closed(reason: "周末") }
-        guard let closures = officialHolidayClosures[year] else { return .unknown }
+        importedCalendarLock.lock()
+        let closures = officialHolidayClosures[year]
+        let importedClosures = importedHolidayClosures[year]
+        importedCalendarLock.unlock()
         let key = String(format: "%04d-%02d-%02d", year, month, day)
-        if let holiday = closures[key] { return .closed(reason: holiday) }
+        if let holiday = closures?[key] { return .closed(reason: holiday) }
+        if let holiday = importedClosures?[key] { return .closed(reason: holiday) }
+        if closures == nil && importedClosures != nil { return .unknown }
+        guard closures != nil else { return .unknown }
         return .open
     }
 
@@ -93,6 +284,38 @@ public enum MarketClock {
         let morning = (9 * 60 + 15)...(11 * 60 + 30)
         let afternoon = (13 * 60)...(15 * 60)
         return morning.contains(current) || afternoon.contains(current)
+    }
+
+    private static func isApprovedExchangeHost(_ host: String) -> Bool {
+        let normalized = host.hasSuffix(".") ? String(host.dropLast()) : host
+        let domains = ["sse.com.cn", "szse.cn", "bse.cn", "bseinfo.net"]
+        return domains.contains { normalized == $0 || normalized.hasSuffix(".\($0)") }
+    }
+
+    private static func ensureImportedCalendarsLoaded() {
+        importedCalendarLock.lock()
+        defer { importedCalendarLock.unlock() }
+        guard !importedCalendarsLoaded else { return }
+        importedCalendarsLoaded = true
+        guard let data = UserDefaults.standard.data(forKey: importedCalendarPreferencesKey),
+              data.count <= maximumImportedCalendarBytes,
+              let payloads = try? JSONDecoder().decode([OfficialHolidayCalendarPayload].self, from: data) else {
+            return
+        }
+        var accepted: [OfficialHolidayCalendarPayload] = []
+        var closures: [Int: [String: String]] = [:]
+        for payload in payloads.prefix(maximumImportedCalendarRecords) {
+            guard (try? validate(payload)) != nil else { continue }
+            accepted.append(payload)
+            let verified = officialHolidayClosures[payload.calendarYear] ?? [:]
+            var yearClosures = closures[payload.calendarYear, default: [:]]
+            for closure in payload.closedDates where verified[closure.date] == nil {
+                yearClosures[closure.date] = yearClosures[closure.date] ?? closure.name
+            }
+            closures[payload.calendarYear] = yearClosures
+        }
+        importedCalendarPayloads = accepted
+        importedHolidayClosures = closures
     }
 
     public static func suggestedInterval(watchCount: Int, lowPowerMode: Bool,

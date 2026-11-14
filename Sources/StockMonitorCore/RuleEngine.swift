@@ -95,8 +95,9 @@ public struct RuleEngine: Sendable {
         })
     }
 
-    /// Percent rules are evaluated only for bars with a known prior close. Limit rules
-    /// are skipped until an authoritative daily limit-price provider is configured.
+    /// Percent rules are evaluated only for bars with a known prior close. Historical
+    /// limit rules stay disabled; live rules may use the snapshot's explicitly labeled
+    /// local formula estimate, which is not an exchange-authoritative limit price.
     public mutating func evaluateHistorical(current: MarketSnapshot,
                                              previousCloseKnownCodes: Set<String>,
                                              now: Date) -> [AlertSignal] {
