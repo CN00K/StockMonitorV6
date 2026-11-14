@@ -27,11 +27,14 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - App
-    resources:
-      - Resources/collector.yaml
-      - Resources/sector_map.json
-      - Resources/PrivacyInfo.xcprivacy
-      - Resources/Assets.xcassets
+      - path: Resources/collector.yaml
+        buildPhase: resources
+      - path: Resources/sector_map.json
+        buildPhase: resources
+      - path: Resources/PrivacyInfo.xcprivacy
+        buildPhase: resources
+      - path: Resources/Assets.xcassets
+        buildPhase: resources
     dependencies:
       - target: StockMonitorCore
     settings:
