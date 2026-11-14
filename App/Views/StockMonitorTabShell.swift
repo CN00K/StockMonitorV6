@@ -10,6 +10,7 @@ struct StockMonitorTabShell: View {
     @State private var isCommandPalettePresented = false
     @State private var unavailableRouteMessage: String?
     @State private var pendingStockRouteCode: String?
+    @State private var isStorageWarningExpanded = false
 
     private var appearance: StockMonitorAppearance {
         StockMonitorAppearance(rawValue: appearanceRawValue) ?? .dusk
@@ -49,18 +50,45 @@ struct StockMonitorTabShell: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
                 if let warning = model.storageWarningMessage {
-                    HStack(alignment: .top, spacing: StockMonitorTokens.Space.small) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                        Text(warning)
-                            .font(.system(size: StockMonitorTokens.TypeScale.body, weight: .semibold))
-                            .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                isStorageWarningExpanded.toggle()
+                            }
+                        } label: {
+                            HStack(spacing: StockMonitorTokens.Space.small) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                Text("仅保存在本 App · 不与其他 App 共享")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.9)
+                                Spacer(minLength: StockMonitorTokens.Space.small)
+                                Image(systemName: isStorageWarningExpanded ? "chevron.up" : "chevron.down")
+                                    .font(.system(size: 11, weight: .bold))
+                            }
+                            .frame(maxWidth: .infinity, minHeight: StockMonitorTokens.Size.minimumHitTarget,
+                                   alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("本机私有存储提示")
+                        .accessibilityValue(isStorageWarningExpanded ? "已展开" : "已收起")
+                        .accessibilityHint("点按以展开或收起 App Group 降级详情。")
+
+                        if isStorageWarningExpanded {
+                            Text(warning)
+                                .font(.system(size: 13))
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.leading, StockMonitorTokens.Space.large + 20)
+                                .padding(.trailing, StockMonitorTokens.Space.large)
+                                .padding(.bottom, StockMonitorTokens.Space.small)
+                                .transition(.opacity)
+                        }
                     }
                     .foregroundStyle(Color.orange)
-                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, StockMonitorTokens.Space.large)
-                    .padding(.vertical, StockMonitorTokens.Space.medium)
-                    .background(Color.orange.opacity(0.14))
-                    .accessibilityElement(children: .combine)
+                    .background(Color.orange.opacity(0.10))
                 }
                 HStack {
                     Spacer(minLength: StockMonitorTokens.Space.small)

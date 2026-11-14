@@ -37,13 +37,13 @@ CLS 依赖可在本机计算的签名参数，站点改版可能使适配器失�
 
 分钟历史补齐的是服务返回的分钟 bars，不是逐笔或完整事件回放；分钟内所有离线异动不能保证恢复。盘中极值仅从本地实际观察到的数据建立，不能推断离线时段高低点。交易日历内置 2022–2026 年经上交所官方年度公告核实的工作日休市日期；深交所原文可直接交叉核验的范围为 2024 全年及 2026 中秋/国庆，其他深交所来源缺口见 [`SOURCE_EVIDENCE.md`](SOURCE_EVIDENCE.md)。Settings 可导入带来源字段的本地 JSON：只接受 HTTPS 上交所/深交所/北交所域名，只写入明示闭市日期并持久保存在本机；导入内容不经 App 独立认证，缺失日期仍 unknown，也没有自动联网更新。周末固定休市；Live Loop 不会假定开市。
 
-前台请求会将必要的查询参数（例如所选深交所股票代码）直接发给对应公开数据源。功能数据仅保存在本机；SQLite 优先使用 App Group 容器，若系统无法取得该容器，则退回到本 App 私有的 Application Support，并在所有标签页显示降级警告。私有回退数据不会与扩展或其他 App 共享。本 App 仅供信息整理与研究，不构成投资建议。
+前台请求会将必要的查询参数（例如所选深交所股票代码）直接发给对应公开数据源。功能数据仅保存在本机；SQLite 优先使用 App Group 容器，若系统无法取得该容器，则退回到本 App 私有的 Application Support。此时顶部默认显示紧凑提示，点按可展开 App Group 故障详情；数据不会与扩展或其他 App 共享。本 App 仅供信息整理与研究，不构成投资建议。
 
 ## 测试与构建
 
 `swift test` 是测试命令。当前 XCTest 覆盖上述功能，并包含分钟指标/VWAP、扫描样本统计、Pearson 与因子相关矩阵、确定性 bootstrap、回测超额收益序列、Sankey/ForceGraph 布局，以及真实 D-6 响应 fixture 的字段/解析契约测试。
 
-本次 UI v2 增加 News 本地日报 PDF 生成/分享与近 7 天 Feed 的类型、P1–P3 和自选标签筛选、Settings 的显式 F10 刷新/通知授权与投递/白名单诊断 JSON 分享、市场页 Workbench 看板/列表与本机来源/会话健康面板，以及 watchlist-aware 股票路由。健康面板仅读 SQLite 和最近实际观察到的来源状态，区分无样本、部分返回、来源时间未知、过期及失败；不会新增网络请求或补造指标。Feed 筛选仅作用于已加载的最多 100 条本地事件，不推断缺失关联、不新增网络请求。Monitor 未读信号区新增四档本机级别筛选（全部/紧急/警告/提示），仅筛选当前已加载的未读信号；`AlertSignal` 直接提供 `code`、`level`、`createdAt`，而规则族仅能从部分 `ruleID` 间接识别，旧/自定义规则 ID 不保证可映射。状态只含未读信号，无法据此断言规则从未触发，因此不显示猜测的空闲规则状态。使用 Linux Swift 6.4.2（`$HOME/.local/opt/swift-6.4.2/usr/bin`）验证：**259 项 XCTest 全部通过**；21 个 App Swift 文件通过 `swiftc -frontend -parse`；`git diff --check` 通过。当前无 Apple SDK，未做 iOS typecheck、Xcode Preview 或设备视觉验收；本轮没有真实 LLM 调用或外部数据刷新。Codemagic `unsigned-ios` 已从 `main` 提交 `80e72a71055c37b54f0a69f612226e720ffa9ec4` 成功生成未签名 arm64 IPA（build ID `6af823b890e83b09c4fa1ff9`）。
+本次 UI v2 增加 News 本地日报 PDF 生成/分享与近 7 天 Feed 的类型、P1–P3 和自选标签筛选、Settings 的显式 F10 刷新/通知授权与投递/白名单诊断 JSON 分享、市场页 Workbench 看板/列表与本机来源/会话健康面板，以及 watchlist-aware 股票路由。App Group 不可用时，顶部降级提示默认收起为一行，并可点按展开故障与私有存储说明。健康面板仅读 SQLite 和最近实际观察到的来源状态，区分无样本、部分返回、来源时间未知、过期及失败；不会新增网络请求或补造指标。Feed 筛选仅作用于已加载的最多 100 条本地事件，不推断缺失关联、不新增网络请求。Monitor 未读信号区新增四档本机级别筛选（全部/紧急/警告/提示），仅筛选当前已加载的未读信号；`AlertSignal` 直接提供 `code`、`level`、`createdAt`，而规则族仅能从部分 `ruleID` 间接识别，旧/自定义规则 ID 不保证可映射。状态只含未读信号，无法据此断言规则从未触发，因此不显示猜测的空闲规则状态。使用 Linux Swift 6.4.2（`$HOME/.local/opt/swift-6.4.2/usr/bin`）验证：**259 项 XCTest 全部通过**；21 个 App Swift 文件通过 `swiftc -frontend -parse`；`git diff --check` 通过。当前无 Apple SDK，未做 iOS typecheck、Xcode Preview 或设备视觉验收；本轮没有真实 LLM 调用或外部数据刷新。Codemagic `unsigned-ios` 已从 `main` 提交 `80e72a71055c37b54f0a69f612226e720ffa9ec4` 成功生成未签名 arm64 IPA（build ID `6af823b890e83b09c4fa1ff9`）。
 
 `UserDefaults.standard` 保存 Analyst endpoint/model 偏好与用户手动导入的交易日历 payload（不含行情、持仓或 Provider 密钥）；`Resources/PrivacyInfo.xcprivacy` 已声明 Apple required-reason API `NSPrivacyAccessedAPICategoryUserDefaults` / `CA92.1`。App 启动不请求通知权限；只有用户在 Settings 显式点按授权按钮才会调用系统提示，获准后仍需另行点按通知投递。当前没有相机、麦克风、位置或照片库权限调用。API key 仍由 iOS Keychain 管理，不包含在源码或 workflow 中。
 
@@ -56,7 +56,7 @@ CLS 依赖可在本机计算的签名参数，站点改版可能使适配器失�
 ## 已选标识、仓库与 Apple 环境验收
 
 - **仓库：** 项目位于公开仓库 [CN00K/StockMonitorV6](https://github.com/CN00K/StockMonitorV6) 的 `main` 分支。
-- **App 标识：** App Bundle ID 为 `com.cn00k.stockmonitorv6`，核心 framework 标识为 `com.cn00k.stockmonitorv6.core`，App Group 为 `group.com.cn00k.stockmonitorv6`。工程配置、entitlements 和 SQLite 路径保持这些标识不变。若 iOS 无法取得配置的 App Group 容器，SQLite 会保存在本 App 私有 Application Support 中，并在 UI 明确说明数据不共享；该回退不会改变 App Group entitlement，也不会伪称正在使用共享容器。仍需在 Apple Developer 中核对对应 App ID 与 App Group 能力。
+- **App 标识：** App Bundle ID 为 `com.cn00k.stockmonitorv6`，核心 framework 标识为 `com.cn00k.stockmonitorv6.core`，App Group 为 `group.com.cn00k.stockmonitorv6`。工程配置、entitlements 和 SQLite 路径保持这些标识不变。若 iOS 无法取得配置的 App Group 容器，SQLite 会保存在本 App 私有 Application Support；UI 默认以紧凑提示说明数据仅本机保存、不与扩展或其他 App 共享，并可展开查看详情。该回退不会改变 App Group entitlement，也不会伪称正在使用共享容器。仍需在 Apple Developer 中核对对应 App ID 与 App Group 能力。
 - **签名与分发：** 当前目标为 unsigned iOS 设备 IPA，由用户用自己的证书签名。workflow 不需要 Apple Team ID、P12、P12 密码或 provisioning profile，仓库不需要为该 workflow 配置这些签名 secrets。unsigned IPA 在签名之前不能安装；签名时，用户自己的 Apple Developer team 必须能注册 `com.cn00k.stockmonitorv6` 与 `group.com.cn00k.stockmonitorv6`，并提供匹配 Bundle ID、授权该 App Group 且包含目标设备 UDID 的 provisioning profile。artifact 同时给出 entitlement sidecar 供签名时使用。
 - **Apple 验收：** workflow 只生成未签名 arm64 IPA；它不执行签名或设备安装。用户签名后仍需在目标 iOS 设备验证 Keychain、App Group、资源加载、前后台暂停/恢复、网络和分享。App Group 在未签名 IPA 中不会作为有效签名 entitlement 生效。
 - **LLM Provider：** 必须在设备 App 内配置兼容 Structured Outputs 的 HTTPS `/chat/completions` endpoint、model ID 和 API key，并自行核对 Provider 价格/限额。股票 Analyst 仍要求明确触发与确认；自动事件补充由 App 的显式资讯刷新触发，仅对 tier policy 指定事件调用，并且只在 App 启动时 endpoint/model/Keychain key 已可用时装配。设置更改下次启动生效；开发测试不调用 Provider。
