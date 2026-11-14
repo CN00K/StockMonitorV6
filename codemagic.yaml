@@ -37,7 +37,6 @@ workflows:
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath "$DERIVED_DATA" \
-            -arch arm64 \
             STOCKMONITOR_APP_BUNDLE_ID="$BUNDLE_ID" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
