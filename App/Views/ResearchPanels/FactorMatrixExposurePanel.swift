@@ -145,8 +145,8 @@ struct FactorMatrixExposurePanel: View {
             }
         }
         .padding(StockMonitorTokens.Space.small)
-        .frame(width: StockMonitorTokens.Size.factorMatrixCellWidth,
-               minHeight: StockMonitorTokens.Size.factorMatrixCellMinHeight, alignment: .topLeading)
+        .frame(width: StockMonitorTokens.Size.factorMatrixCellWidth, alignment: .topLeading)
+        .frame(minHeight: StockMonitorTokens.Size.factorMatrixCellMinHeight, alignment: .topLeading)
         .background(cellColor(for: result.coefficient), in: RoundedRectangle(cornerRadius: StockMonitorTokens.Radius.small))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text("\(factorLabel(factor))与\(factorLabel(result.right))，相关系数\(coefficientText)，样本数\(result.sampleCount)，缺失原因\(reason)"))
@@ -280,8 +280,8 @@ struct FactorMatrixExposurePanel: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(StockMonitorTokens.Space.small)
-        .frame(width: StockMonitorTokens.Size.factorMatrixCellWidth,
-               minHeight: StockMonitorTokens.Size.factorMatrixCellMinHeight, alignment: .topLeading)
+        .frame(width: StockMonitorTokens.Size.factorMatrixCellWidth, alignment: .topLeading)
+        .frame(minHeight: StockMonitorTokens.Size.factorMatrixCellMinHeight, alignment: .topLeading)
         .background(palette.paper2, in: RoundedRectangle(cornerRadius: StockMonitorTokens.Radius.small))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(label))

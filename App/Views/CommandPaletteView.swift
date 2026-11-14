@@ -54,7 +54,7 @@ struct CommandPaletteView: View {
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
                         prompt: "标签或 6 位证券代码")
-            .searchFocused($queryFocused)
+            .modifier(SearchFocusCompatibility(isFocused: $queryFocused))
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("关闭") { dismiss() }
@@ -90,6 +90,19 @@ struct CommandPaletteView: View {
         case .feed: "text.bubble"
         case .lab: "chart.bar.xaxis"
         case .settings: "slider.horizontal.3"
+        }
+    }
+}
+
+private struct SearchFocusCompatibility: ViewModifier {
+    let isFocused: FocusState<Bool>.Binding
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.searchFocused(isFocused)
+        } else {
+            content
         }
     }
 }

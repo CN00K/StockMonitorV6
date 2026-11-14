@@ -157,7 +157,7 @@ struct SentimentComponentsPanel: View {
             } else if let observation = observations[component] {
                 metadata(for: observation)
             } else {
-                Text(reasonText(for: exclusions[component] ?? .missing))
+                Text(reasonText(exclusions[component] ?? .missing))
                     .font(.system(size: StockMonitorTokens.TypeScale.caption))
                     .foregroundStyle(palette.inkMuted)
             }

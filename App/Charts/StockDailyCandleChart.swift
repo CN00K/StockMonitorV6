@@ -52,14 +52,16 @@ struct StockDailyCandleChart: View {
     }
 
     private var candlePlot: some View {
-        Canvas { context, size in
+        let chartScaleMaximum = scaleMaximum
+        let chartScaleRange = scaleRange
+        return Canvas { context, size in
             guard !bars.isEmpty else { return }
 
             let topInset: CGFloat = 7
             let bottomInset: CGFloat = 7
             let plotHeight = max(1, size.height - topInset - bottomInset)
             func yPosition(_ price: Double) -> CGFloat {
-                topInset + CGFloat((scaleMaximum - price) / scaleRange) * plotHeight
+                topInset + CGFloat((chartScaleMaximum - price) / chartScaleRange) * plotHeight
             }
 
             var grid = Path()

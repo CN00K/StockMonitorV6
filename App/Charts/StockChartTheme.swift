@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import StockMonitorCore
 
 struct StockChartTheme {
     let grid: Color
