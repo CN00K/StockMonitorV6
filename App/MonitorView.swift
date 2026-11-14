@@ -1137,7 +1137,7 @@ private struct RuleFamilySettingsEditor: View {
     }
 
     var body: some View {
-        DisclosureGroup(setting.family.title) {
+        DisclosureGroup {
             Toggle("启用", isOn: Binding(get: { setting.enabled }, set: { value in var next = setting; next.enabled = value; onUpdate(next) }))
             if setting.family == .absolutePrice {
                 if watchCodes.isEmpty { Text("先添加自选股，再为每只股票填写高/低价。").font(.caption).foregroundStyle(.secondary) }
