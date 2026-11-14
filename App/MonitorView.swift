@@ -114,8 +114,10 @@ final class MonitorViewModel: ObservableObject {
     private var lifecycleGeneration = 0
 
     init() {
-        let endpoint = Self.validProviderEndpoint(analystEndpointText)
-        let modelID = analystModelText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let endpointText = UserDefaults.standard.string(forKey: "stockmonitor.analyst.endpoint") ?? ""
+        let modelText = UserDefaults.standard.string(forKey: "stockmonitor.analyst.model") ?? ""
+        let endpoint = Self.validProviderEndpoint(endpointText)
+        let modelID = modelText.trimmingCharacters(in: .whitespacesAndNewlines)
         let keyProvider: (any EventLLMAPIKeyProvider)? =
             endpoint != nil && !modelID.isEmpty && AnalystAPIKeychain.hasKey()
                 ? CredentialStoreEventLLMAPIKeyProvider(store: KeychainCredentialStore())
@@ -130,8 +132,7 @@ final class MonitorViewModel: ObservableObject {
         self.runtime = runtime
         engine = runtime.engine
         monitorStore = runtime.store
-        analystConfigured = Self.validProviderEndpoint(analystEndpointText) != nil &&
-            !analystModelText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && AnalystAPIKeychain.hasKey()
+        analystConfigured = endpoint != nil && !modelID.isEmpty && AnalystAPIKeychain.hasKey()
     }
 
     private static func loadEventPolicy() -> CollectorEventPolicy {
